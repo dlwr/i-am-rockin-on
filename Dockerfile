@@ -14,7 +14,8 @@ RUN rustup target add wasm32-unknown-unknown
 WORKDIR /app
 COPY . .
 ENV SQLX_OFFLINE=true
-RUN cargo leptos build --release
+RUN cargo leptos build --release && \
+    cargo build --release --features ssr --bin scrape
 
 # Runtime stage
 FROM debian:bookworm-slim
