@@ -1,0 +1,31 @@
+[tools]
+rust = "1.95"
+"cargo:cargo-leptos" = "latest"
+"cargo:sqlx-cli" = "latest"
+
+[env]
+RUST_LOG = "info,i_am_rockin_on=debug"
+
+[tasks.setup]
+description = "wasm32 target を追加する初回セットアップ"
+run = "rustup target add wasm32-unknown-unknown"
+
+[tasks.dev]
+description = "開発サーバ起動 (cargo leptos watch)"
+run = "cargo leptos watch"
+
+[tasks.scrape]
+description = "手動スクレイプ実行"
+run = "cargo run --features ssr --bin scrape -- --source rokinon"
+
+[tasks.test]
+description = "テスト一括実行"
+run = "cargo test --features ssr"
+
+[tasks."db:create"]
+description = "SQLite DB 作成"
+run = "mkdir -p data && sqlx database create"
+
+[tasks."db:migrate"]
+description = "マイグレーション実行"
+run = "sqlx migrate run"

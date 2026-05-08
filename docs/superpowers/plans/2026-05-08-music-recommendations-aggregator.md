@@ -8,7 +8,7 @@
 
 **Tech Stack:**
 
-- Rust 1.83+ / cargo-leptos
+- Rust 1.95 stable / cargo-leptos（mise でバージョン管理）
 - Leptos 0.7（ssr + hydrate）
 - Axum 0.7
 - sqlx 0.8（sqlite, runtime-tokio, rustls）
@@ -33,26 +33,36 @@
 ### Task 1: Rust ツールチェーン確認と cargo-leptos 導入
 
 **Files:**
+- Create: `mise.toml` (or verify if existing)
 - Verify: `~/.cargo` (Rust toolchain)
 
-- [ ] **Step 1: Rust 1.83+ と nightly が入っとるか確認**
+- [ ] **Step 1: mise でツールバージョンをピン**
 
-```bash
-rustc --version
-rustup toolchain list
+`mise.toml` に rust と cargo-leptos / sqlx-cli を記載：
+
+```toml
+[tools]
+rust = "1.95"
+"cargo:cargo-leptos" = "latest"
+"cargo:sqlx-cli" = "latest"
 ```
 
-Expected: `rustc 1.83.0` 以降が出る。nightly 無しなら追加。
+```bash
+mise install
+mise current
+```
+
+Expected: rust 1.95 と cargo-leptos が PATH に通っとる。
+
+- [ ] **Step 2: wasm32 target 追加**
 
 ```bash
-rustup toolchain install nightly
 rustup target add wasm32-unknown-unknown
 ```
 
-- [ ] **Step 2: cargo-leptos インストール**
+- [ ] **Step 3: cargo-leptos 動作確認**
 
 ```bash
-cargo install cargo-leptos --locked
 cargo leptos --version
 ```
 
@@ -98,9 +108,9 @@ path = "src/bin/scrape.rs"
 required-features = ["ssr"]
 
 [dependencies]
-leptos = { version = "0.7", features = ["nightly"] }
+leptos = "0.7"
 leptos_meta = "0.7"
-leptos_router = { version = "0.7", features = ["nightly"] }
+leptos_router = "0.7"
 leptos_axum = { version = "0.7", optional = true }
 console_error_panic_hook = "0.1"
 serde = { version = "1", features = ["derive"] }
