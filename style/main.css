@@ -33,5 +33,12 @@ h1 { font-size: 2rem; margin-bottom: 0.25rem; }
     text-decoration: none; color: #fff;
 }
 .btn.spotify { background: #1db954; }
+.btn.spotify-web {
+    background: transparent;
+    color: #1db954;
+    border: 1px solid #1db954;
+    padding: 0.15rem 0.45rem;
+    font-size: 0.7rem;
+}
 .btn.youtube { background: #ff0000; }
 .btn.source { background: #555; }

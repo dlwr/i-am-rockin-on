@@ -1,5 +1,48 @@
 use leptos::prelude::*;
 
+/// `https://open.spotify.com/{kind}/{id}?...` を `spotify:{kind}:{id}` に変換する。
+/// Spotify アプリがインストールされとれば URI スキームで直接アプリが開く。
+/// 変換できんかったら元の URL をそのまま返す。
+fn spotify_app_uri(web_url: &str) -> String {
+    let Some(rest) = web_url.strip_prefix("https://open.spotify.com/") else {
+        return web_url.to_string();
+    };
+    let path = rest.split('?').next().unwrap_or(rest);
+    let mut parts = path.splitn(2, '/');
+    match (parts.next(), parts.next()) {
+        (Some(kind), Some(id)) if !kind.is_empty() && !id.is_empty() => {
+            format!("spotify:{kind}:{id}")
+        }
+        _ => web_url.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spotify_app_uri_converts_album_url() {
+        assert_eq!(
+            spotify_app_uri("https://open.spotify.com/album/3BU6KQBgOikCUw"),
+            "spotify:album:3BU6KQBgOikCUw"
+        );
+    }
+
+    #[test]
+    fn spotify_app_uri_strips_query_string() {
+        assert_eq!(
+            spotify_app_uri("https://open.spotify.com/track/abc?si=xyz"),
+            "spotify:track:abc"
+        );
+    }
+
+    #[test]
+    fn spotify_app_uri_returns_input_for_non_spotify_url() {
+        assert_eq!(spotify_app_uri("https://example.com/foo"), "https://example.com/foo");
+    }
+}
+
 #[server(ListRecommendations, "/api")]
 pub async fn list_recommendations() -> Result<Vec<RecommendationView>, ServerFnError> {
     use crate::server::store::RecommendationRepo;
@@ -74,7 +117,8 @@ fn RecommendationGrid(items: Vec<RecommendationView>) -> impl IntoView {
                     </div>
                     <div class="links">
                         {item.spotify_url.clone().map(|u| view! {
-                            <a class="btn spotify" href=u target="_blank" rel="noopener">"Spotify"</a>
+                            <a class="btn spotify" href=spotify_app_uri(&u)>"Spotify"</a>
+                            <a class="btn spotify-web" href=u target="_blank" rel="noopener" title="Web で開く">"web"</a>
                         })}
                         {item.youtube_url.clone().map(|u| view! {
                             <a class="btn youtube" href=u target="_blank" rel="noopener">"YouTube"</a>
