@@ -71,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
                 move || shell(opts.clone())
             },
         )
+        .route("/healthz", axum::routing::get(|| async { "ok" }))
         .fallback(leptos_axum::file_and_error_handler(shell))
         .with_state(leptos_options);
 
