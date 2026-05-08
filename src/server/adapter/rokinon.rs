@@ -184,7 +184,17 @@ impl MediaSource for RokinonAdapter {
             .await?
             .text()
             .await?;
-        let state = extract_initial_state(&html)?;
+        let state = match extract_initial_state(&html) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    url = %candidate.source_url,
+                    error = %e,
+                    "failed to extract INIT_STATE; skipping"
+                );
+                return Ok(None);
+            }
+        };
         let entry_text = match entry_text_for(&state, &candidate.source_external_id) {
             Ok(t) => t,
             Err(_) => return Ok(None),
@@ -193,7 +203,17 @@ impl MediaSource for RokinonAdapter {
             Some(d) => d,
             None => return Ok(None),
         };
-        let title = entry_title(&state, &candidate.source_external_id)?;
+        let title = match entry_title(&state, &candidate.source_external_id) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(
+                    url = %candidate.source_url,
+                    error = %e,
+                    "missing entry_title; skipping"
+                );
+                return Ok(None);
+            }
+        };
         let artist = extract_artist_name(&title);
         let album = extract_album_from_html(&entry_text);
         let youtube = extract_youtube_url(&entry_text);
