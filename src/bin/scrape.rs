@@ -9,6 +9,7 @@ async fn main() -> anyhow::Result<()> {
     use i_am_rockin_on::server::scrape::ScrapePipeline;
     use i_am_rockin_on::server::scrape_log::ScrapeLog;
     use i_am_rockin_on::server::store::RecommendationRepo;
+    use std::str::FromStr;
     use std::sync::Arc;
 
     #[derive(Parser)]
@@ -26,9 +27,12 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cfg = Config::from_env()?;
 
+    let connect_opts = sqlx::sqlite::SqliteConnectOptions::from_str(&cfg.database_url)?
+        .create_if_missing(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(4)
-        .connect(&cfg.database_url)
+        .connect_with(connect_opts)
         .await?;
     sqlx::migrate!().run(&pool).await?;
 
