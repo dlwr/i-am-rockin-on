@@ -1,8 +1,15 @@
+use crate::domain::recommendation::NewRecommendation;
+use crate::server::adapter::source::{CandidateRef, MediaSource};
 use crate::server::error::{AppError, AppResult};
+use async_trait::async_trait;
 use chrono::NaiveDate;
 use regex::Regex;
+use reqwest::Client;
 use scraper::{Html, Selector};
 use serde_json::Value;
+
+const ROKINON_BASE: &str = "https://ameblo.jp/stamedba";
+const USER_AGENT: &str = "i-am-rockin-on bot/1.0 (+https://github.com/dlwr/i-am-rockin-on)";
 
 /// HTML ページから window.INIT_DATA の JSON を抜き出して serde_json::Value にする。
 ///
@@ -111,6 +118,101 @@ pub fn extract_youtube_url(entry_html: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+pub struct RokinonAdapter {
+    client: Client,
+    base_url: String,
+}
+
+impl RokinonAdapter {
+    pub fn new() -> Self {
+        let client = Client::builder()
+            .user_agent(USER_AGENT)
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("reqwest client builds");
+        Self {
+            client,
+            base_url: ROKINON_BASE.to_string(),
+        }
+    }
+
+    pub fn with_base_url(base_url: impl Into<String>) -> Self {
+        let mut me = Self::new();
+        me.base_url = base_url.into();
+        me
+    }
+}
+
+impl Default for RokinonAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl MediaSource for RokinonAdapter {
+    fn id(&self) -> &'static str {
+        "rokinon"
+    }
+
+    async fn list_candidates(&self) -> AppResult<Vec<CandidateRef>> {
+        let url = format!("{}/entrylist.html", self.base_url);
+        let html = self.client.get(&url).send().await?.text().await?;
+        let re = Regex::new(r"/stamedba/entry-(\d+)\.html").unwrap();
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for cap in re.captures_iter(&html) {
+            let id = cap[1].to_string();
+            if seen.insert(id.clone()) {
+                out.push(CandidateRef {
+                    source_external_id: id.clone(),
+                    source_url: format!("{}/entry-{}.html", self.base_url, id),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    async fn fetch_and_extract(
+        &self,
+        candidate: &CandidateRef,
+    ) -> AppResult<Option<NewRecommendation>> {
+        let html = self
+            .client
+            .get(&candidate.source_url)
+            .send()
+            .await?
+            .text()
+            .await?;
+        let state = extract_initial_state(&html)?;
+        let entry_text = match entry_text_for(&state, &candidate.source_external_id) {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        };
+        let featured_at = match detect_oshi(&entry_text) {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+        let title = entry_title(&state, &candidate.source_external_id)?;
+        let artist = extract_artist_name(&title);
+        let album = extract_album_from_html(&entry_text);
+        let youtube = extract_youtube_url(&entry_text);
+
+        Ok(Some(NewRecommendation {
+            source_id: "rokinon".into(),
+            source_url: candidate.source_url.clone(),
+            source_external_id: candidate.source_external_id.clone(),
+            featured_at,
+            artist_name: artist,
+            album_name: album,
+            track_name: None,
+            spotify_url: None,
+            spotify_image_url: None,
+            youtube_url: youtube,
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +317,25 @@ mod tests {
         assert_eq!(artist, "Angelo De Augustine");
         assert!(album.is_some());
         assert_eq!(date, Some(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()));
+    }
+
+    #[tokio::test]
+    async fn list_candidates_parses_entrylist_fixture() {
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let body = std::fs::read_to_string("tests/fixtures/rokinon/entrylist_page1.html").unwrap();
+        Mock::given(path("/entrylist.html"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let adapter = RokinonAdapter::with_base_url(server.uri());
+        let cands = adapter.list_candidates().await.unwrap();
+        assert!(
+            cands.len() > 5,
+            "should find multiple candidates, got {}",
+            cands.len()
+        );
+        assert!(cands.iter().all(|c| c.source_url.contains("/entry-")));
     }
 }
