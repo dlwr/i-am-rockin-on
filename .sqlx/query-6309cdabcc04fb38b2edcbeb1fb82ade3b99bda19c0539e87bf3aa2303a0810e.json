@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE scrape_runs SET status='error',\n                finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),\n                error_message = ?\n               WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6309cdabcc04fb38b2edcbeb1fb82ade3b99bda19c0539e87bf3aa2303a0810e"
+}
