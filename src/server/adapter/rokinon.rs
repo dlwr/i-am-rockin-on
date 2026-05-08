@@ -91,6 +91,9 @@ pub fn extract_artist_name(title: &str) -> String {
 /// 1. 最初の `<h2>` テキスト
 /// 2. Ameblo の OGP カードが埋め込んだ `.ogpCard_title`
 ///    （実フィクスチャでは h2 が無く、こちらに album 名が入っている）
+///
+/// Bandcamp の OGP は `{album}, by {artist}` 形式で配信されるため、
+/// 末尾の `, by ...` サフィックスを取り除いて正規化する。
 pub fn extract_album_from_html(entry_html: &str) -> Option<String> {
     let frag = Html::parse_fragment(entry_html);
     for selector in ["h2", ".ogpCard_title"] {
@@ -101,11 +104,19 @@ pub fn extract_album_from_html(entry_html: &str) -> Option<String> {
                 .map(|el| el.text().collect::<String>().trim().to_string())
                 .filter(|s| !s.is_empty())
             {
-                return Some(text);
+                return Some(normalize_album_name(&text));
             }
         }
     }
     None
+}
+
+fn normalize_album_name(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Some(idx) = trimmed.rfind(", by ") {
+        return trimmed[..idx].trim().to_string();
+    }
+    trimmed.to_string()
 }
 
 /// entry_text の HTML から最初の YouTube リンクを取り出す。
@@ -313,6 +324,17 @@ mod tests {
             extract_album_from_html(html).unwrap(),
             "Angel in Plainclothes"
         );
+    }
+
+    #[test]
+    fn extract_album_from_html_strips_bandcamp_by_suffix() {
+        let html = r#"<div class="ogpCard_title">Malarial Dream, by Alvarius B.</div>"#;
+        assert_eq!(extract_album_from_html(html).unwrap(), "Malarial Dream");
+    }
+
+    #[test]
+    fn normalize_album_name_keeps_titles_without_by_suffix() {
+        assert_eq!(normalize_album_name("Angel in Plainclothes"), "Angel in Plainclothes");
     }
 
     #[test]
