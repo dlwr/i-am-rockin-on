@@ -1,0 +1,86 @@
+[package]
+name = "i-am-rockin-on"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "scrape"
+path = "src/bin/scrape.rs"
+required-features = ["ssr"]
+
+[dependencies]
+leptos = "0.7"
+leptos_meta = "0.7"
+leptos_router = "0.7"
+leptos_axum = { version = "0.7", optional = true }
+console_error_panic_hook = "0.1"
+serde = { version = "1", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+
+axum = { version = "0.7", optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+tower = { version = "0.5", optional = true }
+tower-http = { version = "0.6", features = ["fs"], optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "sqlite", "chrono", "macros"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"], optional = true }
+scraper = { version = "0.20", optional = true }
+serde_json = { version = "1", optional = true }
+regex = { version = "1", optional = true }
+tokio-cron-scheduler = { version = "0.13", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+anyhow = { version = "1", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+dotenvy = { version = "0.15", optional = true }
+async-trait = { version = "0.1", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { version = "1", features = ["full", "test-util"] }
+
+[features]
+hydrate = ["leptos/hydrate", "dep:wasm-bindgen"]
+ssr = [
+  "dep:axum",
+  "dep:tokio",
+  "dep:tower",
+  "dep:tower-http",
+  "dep:leptos_axum",
+  "dep:sqlx",
+  "dep:reqwest",
+  "dep:scraper",
+  "dep:serde_json",
+  "dep:regex",
+  "dep:tokio-cron-scheduler",
+  "dep:tracing",
+  "dep:tracing-subscriber",
+  "dep:anyhow",
+  "dep:clap",
+  "dep:dotenvy",
+  "dep:async-trait",
+  "leptos/ssr",
+  "leptos_meta/ssr",
+  "leptos_router/ssr",
+]
+
+[package.metadata.leptos]
+output-name = "i-am-rockin-on"
+bin-target = "i-am-rockin-on"
+site-root = "target/site"
+site-pkg-dir = "pkg"
+style-file = "style/main.css"
+assets-dir = "assets"
+site-addr = "0.0.0.0:3000"
+reload-port = 3001
+browserquery = "defaults"
+watch = false
+env = "DEV"
+bin-features = ["ssr"]
+bin-default-features = false
+lib-features = ["hydrate"]
+lib-default-features = false

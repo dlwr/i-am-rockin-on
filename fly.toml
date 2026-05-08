@@ -1,0 +1,32 @@
+app = "i-am-rockin-on"
+primary_region = "nrt"
+
+[build]
+
+[env]
+DATABASE_URL = "sqlite:/data/app.db"
+RUST_LOG = "info,i_am_rockin_on=debug"
+TZ = "Asia/Tokyo"
+
+[mounts]
+source = "rockin_data"
+destination = "/data"
+
+[http_service]
+internal_port = 3000
+force_https = true
+auto_stop_machines = "off"
+auto_start_machines = true
+min_machines_running = 1
+
+[[http_service.checks]]
+grace_period = "30s"
+interval = "15s"
+method = "GET"
+timeout = "5s"
+path = "/healthz"
+
+[[vm]]
+cpu_kind = "shared"
+cpus = 1
+memory_mb = 512

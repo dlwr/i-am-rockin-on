@@ -1,0 +1,9 @@
+/target
+/dist
+/.env
+/data
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+.DS_Store

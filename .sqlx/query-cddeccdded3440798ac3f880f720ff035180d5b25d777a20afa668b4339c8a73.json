@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE scrape_runs SET status='success',\n                finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),\n                items_added = ?, items_updated = ?\n               WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "cddeccdded3440798ac3f880f720ff035180d5b25d777a20afa668b4339c8a73"
+}
