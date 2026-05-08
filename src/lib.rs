@@ -3,6 +3,7 @@ use leptos_meta::*;
 use leptos_router::{components::*, StaticSegment};
 
 pub mod pages;
+pub mod domain;
 
 #[cfg(feature = "ssr")]
 pub mod server;
