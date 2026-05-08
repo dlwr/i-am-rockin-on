@@ -4,6 +4,9 @@ use leptos_router::{components::*, StaticSegment};
 
 pub mod pages;
 
+#[cfg(feature = "ssr")]
+pub mod server;
+
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
         <!DOCTYPE html>
