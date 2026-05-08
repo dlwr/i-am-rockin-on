@@ -76,7 +76,15 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("listening on http://{}", &addr);
-    axum::serve(listener, app.into_make_service()).await?;
+    // HTTP に graceful shutdown を配線。cron スケジューラの裏タスクは
+    // runtime drop でアボートされる（取りこぼし許容）。完全な cancel 伝播は v2 で。
+    let shutdown = async {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("shutdown signal received");
+    };
+    axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(shutdown)
+        .await?;
     Ok(())
 }
 
