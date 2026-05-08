@@ -1,11 +1,15 @@
 # Build stage
 FROM rust:1.95-slim AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev curl \
+    curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN rustup target add wasm32-unknown-unknown && \
-    cargo install cargo-leptos --locked --version 0.3.6
+# cargo-leptos のプリビルドバイナリを GitHub Releases から取得。
+# ソースビルドは openssl-sys が perl の FindBin.pm を要求して slim image じゃ通らんけぇ。
+ARG CARGO_LEPTOS_VERSION=0.3.6
+RUN curl -fsSL "https://github.com/leptos-rs/cargo-leptos/releases/download/v${CARGO_LEPTOS_VERSION}/cargo-leptos-installer.sh" | bash
+
+RUN rustup target add wasm32-unknown-unknown
 
 WORKDIR /app
 COPY . .
