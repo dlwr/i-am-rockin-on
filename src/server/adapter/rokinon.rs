@@ -6,61 +6,13 @@ use chrono::NaiveDate;
 use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
-use serde_json::Value;
+use std::collections::HashMap;
+use tokio::sync::Mutex;
 
 const ROKINON_BASE: &str = "https://ameblo.jp/stamedba";
 const USER_AGENT: &str = "i-am-rockin-on bot/1.0 (+https://github.com/dlwr/i-am-rockin-on)";
 
-/// HTML ページから window.INIT_DATA の JSON を抜き出して serde_json::Value にする。
-///
-/// Ameblo の article ページでは `window.INIT_DATA={...};window.RESOURCE_BASE_URL=...`
-/// の形で 1 行に書かれている。JSON は深くネストしており非貪欲な正規表現では取りこぼす
-/// ため、`serde_json::Deserializer` のストリーム機能で先頭の 1 オブジェクトだけ
-/// 消費する方式を採る。
-pub fn extract_initial_state(html: &str) -> AppResult<Value> {
-    // 元仕様では window.INITIAL_STATE だが、実際の Ameblo HTML では INIT_DATA。
-    // 念のため両方試す。
-    let candidates = ["window.INIT_DATA=", "window.INITIAL_STATE="];
-    let mut start: Option<usize> = None;
-    for needle in candidates {
-        if let Some(idx) = html.find(needle) {
-            start = Some(idx + needle.len());
-            break;
-        }
-    }
-    let after_eq = start.ok_or_else(|| {
-        AppError::Parse("window.INIT_DATA / INITIAL_STATE not found".into())
-    })?;
-    let after = &html[after_eq..];
-    let mut de = serde_json::Deserializer::from_str(after).into_iter::<Value>();
-    let value = de
-        .next()
-        .ok_or_else(|| AppError::Parse("no JSON after INIT_DATA".into()))?
-        .map_err(|e| AppError::Parse(format!("invalid JSON: {e}")))?;
-    Ok(value)
-}
-
-/// JSON state と entry_id から、entry_text の HTML 文字列を取り出す。
-pub fn entry_text_for(state: &Value, entry_id: &str) -> AppResult<String> {
-    let path = format!("/entryState/entryMap/{}/entry_text", entry_id);
-    state
-        .pointer(&path)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| AppError::Parse(format!("entry_text not found at {path}")))
-}
-
-/// JSON state からエントリタイトルを取得。
-pub fn entry_title(state: &Value, entry_id: &str) -> AppResult<String> {
-    let path = format!("/entryState/entryMap/{}/entry_title", entry_id);
-    state
-        .pointer(&path)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| AppError::Parse(format!("entry_title not found at {path}")))
-}
-
-/// entry_text から `YYYYMM推し` パターンを探し、その月の1日を NaiveDate で返す。
+/// 記事本文 HTML から `YYYYMM推し` パターンを探し、その月の1日を NaiveDate で返す。
 pub fn detect_oshi(entry_text: &str) -> Option<NaiveDate> {
     let re = Regex::new(r"(\d{4})(\d{2})推し").unwrap();
     let caps = re.captures(entry_text)?;
@@ -85,12 +37,11 @@ pub fn extract_artist_name(title: &str) -> String {
     title.trim().to_string()
 }
 
-/// entry_text の HTML からアルバム名を取り出す。
+/// 記事本文 HTML からアルバム名を取り出す。
 ///
 /// 優先順位:
 /// 1. 最初の `<h2>` テキスト
 /// 2. Ameblo の OGP カードが埋め込んだ `.ogpCard_title`
-///    （実フィクスチャでは h2 が無く、こちらに album 名が入っている）
 ///
 /// Bandcamp の OGP は `{album}, by {artist}` 形式で配信されるため、
 /// 末尾の `, by ...` サフィックスを取り除いて正規化する。
@@ -119,7 +70,7 @@ fn normalize_album_name(raw: &str) -> String {
     trimmed.to_string()
 }
 
-/// entry_text の HTML から最初の YouTube リンクを取り出す。
+/// 記事本文 HTML から最初の YouTube リンクを取り出す。
 pub fn extract_youtube_url(entry_html: &str) -> Option<String> {
     let frag = Html::parse_fragment(entry_html);
     let sel = Selector::parse("a[href]").ok()?;
@@ -129,9 +80,18 @@ pub fn extract_youtube_url(entry_html: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+#[derive(Debug, Clone)]
+struct CachedItem {
+    title: String,
+    body_html: String,
+}
+
 pub struct RokinonAdapter {
     client: Client,
     base_url: String,
+    /// list_candidates が RSS から取得した本文を fetch_and_extract で再利用するキャッシュ。
+    /// pipeline.run() の 1 サイクル内でのみ有効。
+    cache: Mutex<HashMap<String, CachedItem>>,
 }
 
 impl RokinonAdapter {
@@ -144,6 +104,7 @@ impl RokinonAdapter {
         Self {
             client,
             base_url: ROKINON_BASE.to_string(),
+            cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -151,6 +112,11 @@ impl RokinonAdapter {
         let mut me = Self::new();
         me.base_url = base_url.into();
         me
+    }
+
+    fn entry_id_from_link(link: &str) -> Option<String> {
+        let re = Regex::new(r"entry-(\d+)\.html").ok()?;
+        re.captures(link)?.get(1).map(|m| m.as_str().to_string())
     }
 }
 
@@ -167,19 +133,37 @@ impl MediaSource for RokinonAdapter {
     }
 
     async fn list_candidates(&self) -> AppResult<Vec<CandidateRef>> {
-        let url = format!("{}/entrylist.html", self.base_url);
-        let html = self.client.get(&url).send().await?.text().await?;
-        let re = Regex::new(r"/stamedba/entry-(\d+)\.html").unwrap();
-        let mut seen = std::collections::HashSet::new();
+        let url = format!("{}/rss20.xml", self.base_url);
+        let bytes = self.client.get(&url).send().await?.bytes().await?;
+        let channel = rss::Channel::read_from(&bytes[..])
+            .map_err(|e| AppError::Parse(format!("RSS parse error: {e}")))?;
+
+        let mut cache = self.cache.lock().await;
+        cache.clear();
+
         let mut out = Vec::new();
-        for cap in re.captures_iter(&html) {
-            let id = cap[1].to_string();
-            if seen.insert(id.clone()) {
-                out.push(CandidateRef {
-                    source_external_id: id.clone(),
-                    source_url: format!("{}/entry-{}.html", self.base_url, id),
-                });
-            }
+        for item in channel.into_items() {
+            let link = match item.link {
+                Some(l) => l,
+                None => continue,
+            };
+            let entry_id = match Self::entry_id_from_link(&link) {
+                Some(id) => id,
+                None => continue,
+            };
+            let title = item.title.unwrap_or_default();
+            let body_html = item.description.unwrap_or_default();
+            cache.insert(
+                entry_id.clone(),
+                CachedItem {
+                    title,
+                    body_html,
+                },
+            );
+            out.push(CandidateRef {
+                source_external_id: entry_id,
+                source_url: link,
+            });
         }
         Ok(out)
     }
@@ -188,46 +172,28 @@ impl MediaSource for RokinonAdapter {
         &self,
         candidate: &CandidateRef,
     ) -> AppResult<Option<NewRecommendation>> {
-        let html = self
-            .client
-            .get(&candidate.source_url)
-            .send()
-            .await?
-            .text()
-            .await?;
-        let state = match extract_initial_state(&html) {
-            Ok(s) => s,
-            Err(e) => {
+        let cached = {
+            let cache = self.cache.lock().await;
+            cache.get(&candidate.source_external_id).cloned()
+        };
+        let item = match cached {
+            Some(i) => i,
+            None => {
                 tracing::warn!(
-                    url = %candidate.source_url,
-                    error = %e,
-                    "failed to extract INIT_STATE; skipping"
+                    id = %candidate.source_external_id,
+                    "candidate not in RSS cache; skipping"
                 );
                 return Ok(None);
             }
         };
-        let entry_text = match entry_text_for(&state, &candidate.source_external_id) {
-            Ok(t) => t,
-            Err(_) => return Ok(None),
-        };
-        let featured_at = match detect_oshi(&entry_text) {
+
+        let featured_at = match detect_oshi(&item.body_html) {
             Some(d) => d,
             None => return Ok(None),
         };
-        let title = match entry_title(&state, &candidate.source_external_id) {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!(
-                    url = %candidate.source_url,
-                    error = %e,
-                    "missing entry_title; skipping"
-                );
-                return Ok(None);
-            }
-        };
-        let artist = extract_artist_name(&title);
-        let album = extract_album_from_html(&entry_text);
-        let youtube = extract_youtube_url(&entry_text);
+        let artist = extract_artist_name(&item.title);
+        let album = extract_album_from_html(&item.body_html);
+        let youtube = extract_youtube_url(&item.body_html);
 
         Ok(Some(NewRecommendation {
             source_id: "rokinon".into(),
@@ -252,57 +218,19 @@ mod tests {
         std::fs::read_to_string(format!("tests/fixtures/rokinon/{name}")).unwrap()
     }
 
-    // Task 9 tests
-    #[test]
-    fn extract_initial_state_finds_entry_map() {
-        let html = fixture("oshi_article.html");
-        let state = extract_initial_state(&html).unwrap();
-        let entry_map = state
-            .pointer("/entryState/entryMap")
-            .expect("entryMap path should exist");
-        assert!(entry_map.is_object());
-    }
-
-    #[test]
-    fn extract_initial_state_errors_when_missing() {
-        let err = extract_initial_state("<html>no state</html>").unwrap_err();
-        assert!(err.to_string().contains("INIT_DATA") || err.to_string().contains("INITIAL_STATE"));
-    }
-
-    // Task 10 test
-    #[test]
-    fn entry_text_for_returns_html_with_p_tags() {
-        let html = fixture("oshi_article.html");
-        let state = extract_initial_state(&html).unwrap();
-        let text = entry_text_for(&state, "12963931773").unwrap();
-        assert!(
-            text.contains("<p>") || text.contains("<a "),
-            "expected HTML, got: {}",
-            &text[..200.min(text.len())]
-        );
-        assert!(text.contains("推し"), "should mention 推し");
-    }
-
-    // Task 11 tests
     #[test]
     fn detect_oshi_returns_first_of_month() {
-        let html = fixture("oshi_article.html");
-        let state = extract_initial_state(&html).unwrap();
-        let text = entry_text_for(&state, "12963931773").unwrap();
-        let date = detect_oshi(&text).unwrap();
-        assert_eq!(date, NaiveDate::from_ymd_opt(2026, 4, 1).unwrap());
+        assert_eq!(
+            detect_oshi("blah blah 202604推し blah"),
+            Some(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap())
+        );
     }
 
     #[test]
     fn detect_oshi_returns_none_when_marker_absent() {
-        let html = fixture("non_oshi_article.html");
-        let state = extract_initial_state(&html).unwrap();
-        let entry_id = "12963909942";
-        let text = entry_text_for(&state, entry_id).unwrap();
-        assert!(detect_oshi(&text).is_none());
+        assert!(detect_oshi("no marker here").is_none());
     }
 
-    // Task 12 tests
     #[test]
     fn extract_artist_name_strips_no_shinsaku_suffix() {
         assert_eq!(
@@ -334,7 +262,10 @@ mod tests {
 
     #[test]
     fn normalize_album_name_keeps_titles_without_by_suffix() {
-        assert_eq!(normalize_album_name("Angel in Plainclothes"), "Angel in Plainclothes");
+        assert_eq!(
+            normalize_album_name("Angel in Plainclothes"),
+            "Angel in Plainclothes"
+        );
     }
 
     #[test]
@@ -346,38 +277,63 @@ mod tests {
         );
     }
 
-    #[test]
-    fn end_to_end_extraction_from_fixture() {
-        let html = fixture("oshi_article.html");
-        let state = extract_initial_state(&html).unwrap();
-        let entry_id = "12963931773";
-        let entry_text = entry_text_for(&state, entry_id).unwrap();
-        let title = entry_title(&state, entry_id).unwrap();
-        let artist = extract_artist_name(&title);
-        let album = extract_album_from_html(&entry_text);
-        let date = detect_oshi(&entry_text);
-        assert_eq!(artist, "Angelo De Augustine");
-        assert!(album.is_some());
-        assert_eq!(date, Some(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()));
+    #[tokio::test]
+    async fn list_candidates_parses_rss_fixture() {
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let body = std::fs::read_to_string("tests/fixtures/rokinon/rss20.xml").unwrap();
+        Mock::given(path("/rss20.xml"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(body)
+                    .insert_header("content-type", "application/rss+xml; charset=utf-8"),
+            )
+            .mount(&server)
+            .await;
+
+        let adapter = RokinonAdapter::with_base_url(server.uri());
+        let cands = adapter.list_candidates().await.unwrap();
+        assert_eq!(cands.len(), 10, "RSS fixture has 10 items");
+        assert!(cands.iter().all(|c| c.source_url.contains("/entry-")));
     }
 
     #[tokio::test]
-    async fn list_candidates_parses_entrylist_fixture() {
+    async fn fetch_and_extract_returns_oshi_items_from_rss() {
         use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
-        let body = std::fs::read_to_string("tests/fixtures/rokinon/entrylist_page1.html").unwrap();
-        Mock::given(path("/entrylist.html"))
+        let body = std::fs::read_to_string("tests/fixtures/rokinon/rss20.xml").unwrap();
+        Mock::given(path("/rss20.xml"))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
             .mount(&server)
             .await;
 
         let adapter = RokinonAdapter::with_base_url(server.uri());
         let cands = adapter.list_candidates().await.unwrap();
-        assert!(
-            cands.len() > 5,
-            "should find multiple candidates, got {}",
-            cands.len()
-        );
-        assert!(cands.iter().all(|c| c.source_url.contains("/entry-")));
+
+        let mut oshi_count = 0;
+        let mut artists = Vec::new();
+        for c in &cands {
+            if let Some(rec) = adapter.fetch_and_extract(c).await.unwrap() {
+                oshi_count += 1;
+                artists.push(rec.artist_name.clone());
+            }
+        }
+        assert_eq!(oshi_count, 3, "RSS fixture has 3 推し items");
+        // 各 artist がきちんと抽出され、空文字でないこと
+        assert!(artists.iter().all(|a| !a.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn fetch_and_extract_skips_when_not_in_cache() {
+        let adapter = RokinonAdapter::new();
+        // list_candidates を呼ばずに fetch_and_extract を呼ぶ → cache 空 → None
+        let result = adapter
+            .fetch_and_extract(&CandidateRef {
+                source_external_id: "999999".into(),
+                source_url: "https://example.com/entry-999999.html".into(),
+            })
+            .await
+            .unwrap();
+        assert!(result.is_none());
     }
 }
