@@ -38,3 +38,27 @@
     margin: 0 auto;
   }
 }
+
+@layer components {
+  .tilt-cycle > * {
+    transition: transform 0.2s ease;
+  }
+  .tilt-cycle > :nth-child(4n+1) { transform: rotate(-0.7deg); }
+  .tilt-cycle > :nth-child(4n+2) { transform: rotate(0.5deg); }
+  .tilt-cycle > :nth-child(4n+3) { transform: rotate(0.3deg); }
+  .tilt-cycle > :nth-child(4n+4) { transform: rotate(-0.5deg); }
+
+  .tilt-cycle > *:hover,
+  .tilt-cycle > *:focus-within {
+    transform: rotate(0deg) translateY(-3px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tilt-cycle > *,
+    .tilt-cycle > *:hover,
+    .tilt-cycle > *:focus-within {
+      transition: none;
+      transform: none;
+    }
+  }
+}
