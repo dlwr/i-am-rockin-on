@@ -90,12 +90,17 @@ impl From<crate::domain::recommendation::Recommendation> for RecommendationView 
 pub fn Home() -> impl IntoView {
     let recs = Resource::new(|| (), |_| async { list_recommendations().await });
     view! {
-        <h1>"I am rockin on"</h1>
-        <p class="lede">"音楽メディアの『推し』を集めたページずら"</p>
-        <Suspense fallback=|| view! { <p>"loading..."</p> }>
+        <header class="border-b-4 border-double border-ink pb-2 mb-6">
+            <h1 class="font-zine italic font-bold text-3xl text-ink m-0">
+                "i am rockin on"
+            </h1>
+        </header>
+        <Suspense fallback=|| view! { <p class="text-sepia">"loading..."</p> }>
             {move || recs.get().map(|r| match r {
                 Ok(items) => view! { <RecommendationGrid items=items/> }.into_any(),
-                Err(e) => view! { <p class="error">{format!("error: {e}")}</p> }.into_any(),
+                Err(e) => view! {
+                    <p class="text-err">{format!("error: {e}")}</p>
+                }.into_any(),
             })}
         </Suspense>
     }
@@ -104,26 +109,56 @@ pub fn Home() -> impl IntoView {
 #[component]
 fn RecommendationGrid(items: Vec<RecommendationView>) -> impl IntoView {
     view! {
-        <ul class="grid">
+        <ul class="tilt-cycle list-none p-0 m-0 grid grid-cols-2 tab:grid-cols-3 pc:grid-cols-4 gap-5">
             {items.into_iter().map(|item| view! {
-                <li class="card">
+                <li class="bg-card shadow-zine p-3 flex flex-col gap-2">
                     {item.spotify_image_url.as_ref().map(|src| view! {
-                        <img src=src.clone() alt="" loading="lazy"/>
+                        <img
+                            class="w-full aspect-square object-cover bg-paper"
+                            src=src.clone()
+                            alt=""
+                            loading="lazy"
+                        />
                     })}
-                    <div class="meta">
-                        <div class="artist">{item.artist_name.clone()}</div>
-                        {item.album_name.clone().map(|a| view! { <div class="album">{a}</div> })}
-                        <div class="featured">{item.featured_at.clone()}</div>
+                    <div class="flex flex-col gap-0.5">
+                        <div class="font-zine font-bold text-[0.95rem] text-ink leading-tight">
+                            {item.artist_name.clone()}
+                        </div>
+                        {item.album_name.clone().map(|a| view! {
+                            <div class="font-zine italic text-[0.8rem] text-sepia leading-tight">{a}</div>
+                        })}
+                        <div class="text-[0.7rem] text-sepia mt-1">
+                            {item.featured_at.clone()}
+                        </div>
                     </div>
-                    <div class="links">
+                    <div class="flex flex-wrap gap-1.5 mt-auto">
                         {item.spotify_url.clone().map(|u| view! {
-                            <a class="btn spotify" href=spotify_app_uri(&u)>"Spotify"</a>
-                            <a class="btn spotify-web" href=u target="_blank" rel="noopener" title="Web で開く">"web"</a>
+                            <a
+                                class="text-xs font-semibold px-2.5 py-1 rounded-full bg-spotify text-white no-underline"
+                                href=spotify_app_uri(&u)
+                            >"Spotify"</a>
+                            <a
+                                class="text-[0.7rem] font-semibold px-2 py-0.5 rounded-full border border-spotify text-spotify no-underline"
+                                href=u
+                                target="_blank"
+                                rel="noopener"
+                                title="Web で開く"
+                            >"web"</a>
                         })}
                         {item.youtube_url.clone().map(|u| view! {
-                            <a class="btn youtube" href=u target="_blank" rel="noopener">"YouTube"</a>
+                            <a
+                                class="text-xs font-semibold px-2.5 py-1 rounded-full bg-youtube text-white no-underline"
+                                href=u
+                                target="_blank"
+                                rel="noopener"
+                            >"YouTube"</a>
                         })}
-                        <a class="btn source" href=item.source_url target="_blank" rel="noopener">"記事"</a>
+                        <a
+                            class="text-xs font-semibold px-2.5 py-1 rounded-full border border-ink text-ink no-underline"
+                            href=item.source_url
+                            target="_blank"
+                            rel="noopener"
+                        >"記事"</a>
                     </div>
                 </li>
             }).collect_view()}
