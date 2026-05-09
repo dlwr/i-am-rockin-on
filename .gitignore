@@ -7,3 +7,4 @@
 *.db-wal
 *.db-journal
 .DS_Store
+/.superpowers
