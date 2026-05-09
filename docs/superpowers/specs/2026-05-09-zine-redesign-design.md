@@ -5,12 +5,13 @@
 
 ## 1. 目的とスコープ
 
-`/`（一覧ページ）の見た目を、現在のミニマル・ニュートラルな白背景グリッドから、ZINE（手作り音楽雑誌）のテイストに刷新する。同時にスマホで2列固定にしてジャケットを並べて見やすくする。
+`/`（一覧ページ）の見た目を、現在のミニマル・ニュートラルな白背景グリッドから、ZINE（手作り音楽雑誌）のテイストに刷新する。同時にスマホで2列固定にしてジャケットを並べて見やすくする。あわせて、将来のページ追加に備えてスタイル基盤を Tailwind CSS に移行する（リデザインと同時実施）。
 
 ### スコープ内
 
-- `style/main.css` の全面書き換え
-- `src/pages/home.rs` の view! 構造とクラス名の調整（ロジック・データ構造・Server Function は触らん）
+- **Tailwind CSS 導入**（cargo-leptos の Tailwind 統合を使用）
+- `style/main.css` の廃止 → `style/tailwind.css` ＋ `tailwind.config.js` ＋ `package.metadata.leptos` 設定変更
+- `src/pages/home.rs` の view! クラス名を Tailwind utility に書き換え（ロジック・データ構造・Server Function は触らん）
 - スマホ2列固定 → タブレット3列 → PC 4列のレスポンシブ
 - カードに「貼った紙」感を出す（傾き・ハードシャドウ）
 - ホバーで傾きを戻して持ち上げるマイクロインタラクション
@@ -124,27 +125,104 @@ i am rockin on            ← セリフ体イタリック太字、2rem
 
 ## 6. 実装変更点
 
-### 6.1 `style/main.css`
-- 既存内容を全面書換え
-- 上記カラー・タイポ・レイアウト・カード傾きを CSS で実装
-- メディアクエリ `min-width: 600px`, `min-width: 1000px` の2段
-- `prefers-reduced-motion` ブロック追加
-- 維持するクラス: `.error`（色・配置）／ `.btn.spotify` / `.btn.spotify-web` / `.btn.youtube`（既存色）／ `.btn.source`（旧 `.btn.source` ＝ 記事ボタン、配色を本書 Sec.3 に合わせ調整）
-- 削除するクラス: `.lede`（サブコピーを廃止するため）
+### 6.1 Tailwind 導入
+
+cargo-leptos の Tailwind 統合を使う。Node.js 不要で、cargo-leptos が `tailwindcss` バイナリを自動取得する。
+
+**`Cargo.toml` の `[package.metadata.leptos]` 変更**
+- 削除: `style-file = "style/main.css"`
+- 追加: `tailwind-input-file = "style/tailwind.css"`
+- 追加: `tailwind-config-file = "tailwind.config.js"`
+
+**新規ファイル `tailwind.config.js`**
+```js
+module.exports = {
+  content: ["./src/**/*.rs"],
+  theme: {
+    extend: {
+      colors: {
+        paper: "#f4ecd8",       // クラフト紙背景
+        card: "#fffaf0",         // カード紙
+        ink: "#2a2418",          // 文字メイン
+        sepia: "#6a5a3a",        // サブ文字
+        spotify: "#1db954",
+        youtube: "#ff0000",
+        err: "#b00020",
+      },
+      fontFamily: {
+        zine: ['Georgia', '"Hiragino Mincho ProN"', 'serif'],
+      },
+      boxShadow: {
+        zine: "2px 3px 0 #2a2418",
+      },
+      rotate: {
+        "tilt-1": "-0.7deg",
+        "tilt-2": "0.5deg",
+        "tilt-3": "0.3deg",
+        "tilt-4": "-0.5deg",
+      },
+    },
+  },
+};
+```
+
+**新規ファイル `style/tailwind.css`**
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 4枚周期の傾きを nth-child で当てる（utility では表現しにくい） */
+@layer components {
+  .tilt-cycle > :nth-child(4n+1) { transform: rotate(-0.7deg); }
+  .tilt-cycle > :nth-child(4n+2) { transform: rotate(0.5deg); }
+  .tilt-cycle > :nth-child(4n+3) { transform: rotate(0.3deg); }
+  .tilt-cycle > :nth-child(4n+4) { transform: rotate(-0.5deg); }
+  .tilt-cycle > * { transition: transform 0.2s ease; }
+  .tilt-cycle > *:hover,
+  .tilt-cycle > *:focus-within {
+    transform: rotate(0deg) translateY(-3px);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tilt-cycle > *,
+    .tilt-cycle > *:hover,
+    .tilt-cycle > *:focus-within {
+      transition: none;
+      transform: none;
+    }
+  }
+}
+```
+
+**削除するファイル**: `style/main.css`
 
 ### 6.2 `src/pages/home.rs`
-- `view!` 内のクラス名整理（必要に応じて `<header>` で囲む等）
+
+- `view!` 内のクラス名を Tailwind utility に書き換える（例: `class="grid"` → `class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 tilt-cycle"`）
+- ヘッダ: `<h1 class="font-zine italic font-bold text-3xl border-b-4 border-double border-ink pb-2 mb-6">…</h1>`
 - `<p class="lede">…</p>` 行を削除（サブコピー廃止）
-- 媒体タグ要素は元々無い／追加せん
-- ジャケ画像のフォールバック分岐を追加（None の時にプレースホルダ要素を出す）
+- カード: `class="bg-card shadow-zine p-3 flex flex-col gap-2"` 等
+- ボタン: `class="bg-spotify text-white text-xs px-2 py-1 rounded-full"` 等
+- ジャケ画像フォールバック分岐を追加（None の時にプレースホルダ要素を出す）
 - `RecommendationView` は触らん
 
-### 6.3 触らないファイル
+Tailwind の `content: ["./src/**/*.rs"]` で `view!` 内の文字列リテラルがスキャンされるけぇ、クラス名を文字列で渡しとる限り検出される。動的クラス組み立てはせん（safelist 不要）。
+
+### 6.3 ビルド・運用
+
+- ローカル: `cargo leptos watch` がそのまま動く（cargo-leptos が tailwind バイナリを fetch）
+- Docker / fly.io: cargo-leptos のビルドステップで tailwind が走る。`Dockerfile` の cargo-leptos 設定変更は不要
+- 既存の `style/main.css` への参照（README やテストなど）は無いことを実装時に確認する
+
+### 6.4 触らないファイル
+
 - `src/server/*`
 - `src/domain/*`
+- `src/bin/*`
 - `migrations/*`
 - `assets/*`
 - ロジック・テスト
+- `mise.toml`（cargo-leptos のタスク経由でビルドが走るため変更不要）
 
 ## 7. テスト
 
@@ -162,8 +240,11 @@ CSS は単体テスト対象外。`home.rs` のロジック（`spotify_app_uri` 
 - **ハードシャドウの色とアクセシビリティ**: `#2a2418` シャドウは紙背景とのコントラスト比で問題なし
 - **セリフ体の日本語**: アーティスト名・アルバム名はほぼ英語想定だが、邦楽が入った場合に "Hiragino Mincho ProN" にフォールバックする
 - **第2イテレーションで媒体タグを戻す可能性**: 複数媒体対応時に再導入。その時はカード下部 meta-row に `[月] [媒体]` で並べる方針を踏襲する想定
+- **Tailwind 初回ビルド時間**: cargo-leptos が初回に tailwindcss バイナリを fetch（数MB、数秒）。CI / Docker ビルドで初回だけ伸びるが、レイヤキャッシュで2回目以降は影響なし
+- **fly.io での Tailwind 実行**: Docker のマルチステージビルド内で cargo-leptos がバイナリ取得・実行。glibc / musl の互換性に注意（cargo-leptos が自動で適切なターゲットを選ぶ想定）。実装時に `fly deploy` で1回確認する
 
 ## 9. 関連
 
 - 既存設計: `docs/superpowers/specs/2026-05-08-music-recommendations-aggregator-design.md`
-- 対象ファイル: `style/main.css`, `src/pages/home.rs`
+- 対象ファイル: `Cargo.toml`（leptos metadata）, `style/tailwind.css`（新規）, `tailwind.config.js`（新規）, `src/pages/home.rs`
+- 削除ファイル: `style/main.css`
