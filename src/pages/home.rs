@@ -112,14 +112,22 @@ fn RecommendationGrid(items: Vec<RecommendationView>) -> impl IntoView {
         <ul class="tilt-cycle list-none p-0 m-0 grid grid-cols-2 tab:grid-cols-3 pc:grid-cols-4 gap-5">
             {items.into_iter().map(|item| view! {
                 <li class="bg-card shadow-zine p-3 flex flex-col gap-2">
-                    {item.spotify_image_url.as_ref().map(|src| view! {
-                        <img
-                            class="w-full aspect-square object-cover bg-paper"
-                            src=src.clone()
-                            alt=""
-                            loading="lazy"
-                        />
-                    })}
+                    {match item.spotify_image_url.as_ref() {
+                        Some(src) => view! {
+                            <img
+                                class="w-full aspect-square object-cover bg-paper"
+                                src=src.clone()
+                                alt=""
+                                loading="lazy"
+                            />
+                        }.into_any(),
+                        None => view! {
+                            <div
+                                class="w-full aspect-square bg-placeholder flex items-center justify-center text-sepia text-4xl font-zine"
+                                aria-hidden="true"
+                            >"♪"</div>
+                        }.into_any(),
+                    }}
                     <div class="flex flex-col gap-0.5">
                         <div class="font-zine font-bold text-[0.95rem] text-ink leading-tight">
                             {item.artist_name.clone()}
