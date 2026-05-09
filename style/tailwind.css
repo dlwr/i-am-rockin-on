@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+@source "./src/**/*.rs";
+
+@theme {
+  --color-paper: #f4ecd8;
+  --color-card: #fffaf0;
+  --color-ink: #2a2418;
+  --color-sepia: #6a5a3a;
+  --color-placeholder: #e8dcc4;
+  --color-spotify: #1db954;
+  --color-youtube: #ff0000;
+  --color-err: #b00020;
+
+  --font-zine: Georgia, "Hiragino Mincho ProN", serif;
+
+  --shadow-zine: 2px 3px 0 #2a2418;
+
+  --breakpoint-tab: 600px;
+  --breakpoint-pc: 1000px;
+  --breakpoint-sm: initial;
+  --breakpoint-md: initial;
+  --breakpoint-lg: initial;
+  --breakpoint-xl: initial;
+  --breakpoint-2xl: initial;
+}
+
+@layer base {
+  body {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    margin: 0;
+    padding: 1rem;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  main {
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+}
