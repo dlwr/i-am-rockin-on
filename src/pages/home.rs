@@ -17,6 +17,15 @@ fn spotify_app_uri(web_url: &str) -> String {
     }
 }
 
+/// ジャケ画像の `alt` テキストを組み立てる。 album があれば "Artist - Album"、
+/// 無い／空白のみなら artist のみ。 末尾の "- " 残りを避けるため album のトリム判定する。
+fn image_alt(artist: &str, album: Option<&str>) -> String {
+    match album {
+        Some(a) if !a.trim().is_empty() => format!("{artist} - {a}"),
+        _ => artist.to_string(),
+    }
+}
+
 /// `source_id` を表示用ラベルに写像する。未知の id はそのまま返す。
 fn source_label(source_id: &str) -> &str {
     match source_id {
@@ -49,6 +58,26 @@ mod tests {
     #[test]
     fn spotify_app_uri_returns_input_for_non_spotify_url() {
         assert_eq!(spotify_app_uri("https://example.com/foo"), "https://example.com/foo");
+    }
+
+    #[test]
+    fn image_alt_combines_artist_and_album() {
+        assert_eq!(
+            image_alt("Aldous Harding", Some("Train on the Island")),
+            "Aldous Harding - Train on the Island",
+        );
+    }
+
+    #[test]
+    fn image_alt_uses_only_artist_when_album_is_none() {
+        assert_eq!(image_alt("Bon Iver", None), "Bon Iver");
+    }
+
+    #[test]
+    fn image_alt_uses_only_artist_when_album_is_blank() {
+        // album が空文字や空白のみの時に "Artist - " と末尾ダッシュが残らんよう
+        assert_eq!(image_alt("Phoebe Bridgers", Some("")), "Phoebe Bridgers");
+        assert_eq!(image_alt("Phoebe Bridgers", Some("   ")), "Phoebe Bridgers");
     }
 
     #[test]
@@ -146,7 +175,7 @@ fn AlbumGrid(items: Vec<AlbumCardView>) -> impl IntoView {
                             <img
                                 class="w-full aspect-square object-cover bg-paper"
                                 src=src.clone()
-                                alt=""
+                                alt=image_alt(&item.artist_name, item.album_name.as_deref())
                                 loading="lazy"
                             />
                         }.into_any(),
