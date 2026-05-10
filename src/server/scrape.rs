@@ -13,6 +13,8 @@ pub struct ScrapePipeline {
     pub log: Arc<ScrapeLog>,
     /// SIGTERM で main から cancel される。 candidate ループ前後で観測して途中離脱する
     pub cancel: CancellationToken,
+    /// 候補の合間に挟むレートリミット用 sleep。 0 なら sleep 自体を skip
+    pub throttle_ms: u64,
 }
 
 #[derive(Debug, Default)]
@@ -71,7 +73,9 @@ impl ScrapePipeline {
                     outcome.items_skipped += 1;
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            if self.throttle_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(self.throttle_ms)).await;
+            }
         }
         if should_warn_zero_items(
             candidates_count,
@@ -228,6 +232,7 @@ mod tests {
             repo: Arc::new(RecommendationRepo::new(pool.clone())),
             log: Arc::new(ScrapeLog::new(pool)),
             cancel,
+            throttle_ms: 0,
         };
         let outcome = pipeline.run().await.unwrap();
         assert_eq!(outcome.items_added, 0, "cancelled → no insert");
@@ -289,6 +294,7 @@ mod tests {
             repo: Arc::new(RecommendationRepo::new(pool.clone())),
             log: Arc::new(ScrapeLog::new(pool)),
             cancel: tokio_util::sync::CancellationToken::new(),
+            throttle_ms: 0,
         };
         let outcome = pipeline.run().await.unwrap();
         assert_eq!(outcome.items_added, 1);
@@ -346,6 +352,7 @@ mod tests {
             repo: Arc::new(RecommendationRepo::new(pool.clone())),
             log: Arc::new(ScrapeLog::new(pool)),
             cancel: tokio_util::sync::CancellationToken::new(),
+            throttle_ms: 0,
         };
         let outcome = pipeline.run().await.unwrap();
         assert_eq!(outcome.items_added, 0, "Spotify miss must not save row");
@@ -496,6 +503,7 @@ mod tests {
             repo: Arc::new(RecommendationRepo::new(pool.clone())),
             log: Arc::new(ScrapeLog::new(pool)),
             cancel: tokio_util::sync::CancellationToken::new(),
+            throttle_ms: 0,
         };
         let outcome = pipeline.run().await.unwrap();
         assert_eq!(outcome.items_added, 2, "two ok candidates should insert");
