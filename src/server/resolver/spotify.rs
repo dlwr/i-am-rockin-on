@@ -74,7 +74,11 @@ impl SpotifyResolver {
             return Ok(None);
         };
         let token = self.access_token().await?;
-        let q = format!("artist:\"{}\" album:\"{}\"", artist, album);
+        let q = format!(
+            "artist:\"{}\" album:\"{}\"",
+            sanitize_query_value(artist),
+            sanitize_query_value(album)
+        );
         let resp: AlbumsResp = self
             .http
             .get(&self.search_url)
@@ -91,6 +95,12 @@ impl SpotifyResolver {
             track_name: None,
         }))
     }
+}
+
+/// Spotify search query の field filter（`artist:"…"` / `album:"…"`）の値から
+/// `"` と `\` を取り除く。 これらが混ざると field filter parser が壊れて silent miss する。
+fn sanitize_query_value(s: &str) -> String {
+    s.chars().filter(|c| *c != '"' && *c != '\\').collect()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -222,6 +232,43 @@ mod tests {
         );
         let m = r.resolve("Foo", None).await.unwrap();
         assert!(m.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_strips_double_quote_and_backslash_from_query() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "tok", "token_type": "Bearer", "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        // 入力 artist=`AC\DC`, album=`"Heroes"` をサニタイズして
+        // q == `artist:"ACDC" album:"Heroes"` で問い合わされることを期待する。
+        // サニタイズせんと q に裸の `"` `\` が混じって Spotify field filter が壊れ silent miss する。
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(query_param("q", "artist:\"ACDC\" album:\"Heroes\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "albums": { "items": [{
+                    "external_urls": { "spotify": "https://open.spotify.com/album/sanitized" },
+                    "images": []
+                }]}
+            })))
+            .mount(&server)
+            .await;
+
+        let r = SpotifyResolver::new("id".into(), "sec".into()).with_endpoints(
+            format!("{}/token", server.uri()),
+            format!("{}/search", server.uri()),
+        );
+        let m = r
+            .resolve("AC\\DC", Some("\"Heroes\""))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(m.url, "https://open.spotify.com/album/sanitized");
     }
 
     #[tokio::test]
