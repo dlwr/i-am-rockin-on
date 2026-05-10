@@ -401,6 +401,7 @@ mod tests {
             resolver: Arc::new(resolver),
             repo: Arc::new(RecommendationRepo::new(pool.clone())),
             log: Arc::new(ScrapeLog::new(pool)),
+            cancel: tokio_util::sync::CancellationToken::new(),
         };
         let outcome = pipeline.run().await.unwrap();
         // Err は次の scrape で再試行する想定で、 row は保存せず skip
