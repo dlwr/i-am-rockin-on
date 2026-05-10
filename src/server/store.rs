@@ -246,6 +246,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upsert_preserves_spotify_fields_when_manual_override_is_set() {
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool.clone());
+
+        // 既存 row を入れて、 manual_override=1 ＋ 手動編集の Spotify URL に書き換える
+        let (initial, _) = repo.upsert(sample("11111")).await.unwrap();
+        sqlx::query(
+            "UPDATE recommendations
+             SET manual_override = 1,
+                 spotify_url = 'https://open.spotify.com/album/manual',
+                 spotify_image_url = 'https://i.scdn.co/image/manual.jpg'
+             WHERE id = ?",
+        )
+        .bind(initial.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // resolver が違う Spotify URL を返してきたつもりで upsert
+        let mut incoming = sample("11111");
+        incoming.album_name = Some("Refreshed Album".into());
+        incoming.youtube_url = Some("https://www.youtube.com/watch?v=new".into());
+        incoming.featured_at = NaiveDate::from_ymd_opt(2026, 5, 15).unwrap();
+        incoming.spotify_url = Some("https://open.spotify.com/album/automatic".into());
+        incoming.spotify_image_url = Some("https://i.scdn.co/image/auto.jpg".into());
+
+        let (saved, inserted) = repo.upsert(incoming).await.unwrap();
+
+        assert!(!inserted, "既存 row の更新になる");
+        // Spotify 系は手動編集値を保つ
+        assert_eq!(
+            saved.spotify_url.as_deref(),
+            Some("https://open.spotify.com/album/manual"),
+        );
+        assert_eq!(
+            saved.spotify_image_url.as_deref(),
+            Some("https://i.scdn.co/image/manual.jpg"),
+        );
+        // それ以外のフィールドは更新される
+        assert_eq!(saved.album_name.as_deref(), Some("Refreshed Album"));
+        assert_eq!(
+            saved.youtube_url.as_deref(),
+            Some("https://www.youtube.com/watch?v=new"),
+        );
+        assert_eq!(saved.featured_at, NaiveDate::from_ymd_opt(2026, 5, 15).unwrap());
+        assert!(saved.manual_override, "manual_override フラグは維持される");
+    }
+
+    #[tokio::test]
     async fn upsert_updates_when_existing() {
         let pool = setup_pool().await;
         let repo = RecommendationRepo::new(pool);
