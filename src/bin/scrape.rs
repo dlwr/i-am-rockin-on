@@ -2,6 +2,7 @@
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     use clap::Parser;
+    use i_am_rockin_on::server::adapter::pitchfork::PitchforkAdapter;
     use i_am_rockin_on::server::adapter::rokinon::RokinonAdapter;
     use i_am_rockin_on::server::adapter::source::MediaSource;
     use i_am_rockin_on::server::config::Config;
@@ -38,6 +39,11 @@ async fn main() -> anyhow::Result<()> {
 
     let source: Arc<dyn MediaSource> = match cli.source.as_str() {
         "rokinon" => Arc::new(RokinonAdapter::new()),
+        "pitchfork" => Arc::new(PitchforkAdapter::new(
+            cfg.pitchfork_score_threshold,
+            cfg.pitchfork_recency_days,
+            cfg.pitchfork_max_pages,
+        )),
         other => anyhow::bail!("unknown source: {other}"),
     };
     let resolver = Arc::new(SpotifyResolver::new(
