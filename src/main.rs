@@ -49,6 +49,7 @@ async fn main() -> anyhow::Result<()> {
         repo: repo.clone(),
         log: log.clone(),
         cancel: cancel.clone(),
+        throttle_ms: cfg.scrape_throttle_ms,
     });
 
     let pitchfork_source: Arc<dyn MediaSource> = Arc::new(PitchforkAdapter::new(
@@ -62,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
         repo: repo.clone(),
         log: log.clone(),
         cancel: cancel.clone(),
+        throttle_ms: cfg.scrape_throttle_ms,
     });
 
     {
