@@ -166,6 +166,14 @@ pub fn Home() -> impl IntoView {
 
 #[component]
 fn AlbumGrid(items: Vec<AlbumCardView>) -> impl IntoView {
+    if items.is_empty() {
+        return view! {
+            <p class="text-sepia font-zine italic text-center my-12">
+                "まだ推しが集まっとらんずら"
+            </p>
+        }
+        .into_any();
+    }
     view! {
         <ul class="tilt-cycle list-none p-0 m-0 grid grid-cols-2 tab:grid-cols-3 pc:grid-cols-4 gap-5">
             {items.into_iter().map(|item| view! {
@@ -225,6 +233,7 @@ fn AlbumGrid(items: Vec<AlbumCardView>) -> impl IntoView {
             }).collect_view()}
         </ul>
     }
+    .into_any()
 }
 
 #[component]
