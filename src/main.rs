@@ -6,6 +6,7 @@ async fn main() -> anyhow::Result<()> {
     use i_am_rockin_on::server::adapter::rokinon::RokinonAdapter;
     use i_am_rockin_on::server::adapter::source::MediaSource;
     use i_am_rockin_on::server::config::Config;
+    use i_am_rockin_on::server::health::db_ready;
     use i_am_rockin_on::server::resolver::spotify::SpotifyResolver;
     use i_am_rockin_on::server::scheduler::{add_scrape_job, new_scheduler, run_initial_scrape_if_empty};
     use i_am_rockin_on::server::scrape::ScrapePipeline;
@@ -102,6 +103,23 @@ async fn main() -> anyhow::Result<()> {
             },
         )
         .route("/healthz", axum::routing::get(|| async { "ok" }))
+        .route(
+            "/readyz",
+            axum::routing::get({
+                let pool = pool.clone();
+                move || {
+                    let pool = pool.clone();
+                    async move {
+                        if db_ready(&pool).await {
+                            (axum::http::StatusCode::OK, "ok")
+                        } else {
+                            tracing::error!("readyz: db ping failed");
+                            (axum::http::StatusCode::SERVICE_UNAVAILABLE, "db not ready")
+                        }
+                    }
+                }
+            }),
+        )
         .fallback(leptos_axum::file_and_error_handler(shell))
         .with_state(leptos_options);
 

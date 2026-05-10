@@ -1,6 +1,7 @@
 pub mod adapter;
 pub mod config;
 pub mod error;
+pub mod health;
 pub mod resolver;
 pub mod scheduler;
 pub mod scrape;
