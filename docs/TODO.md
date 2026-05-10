@@ -2,6 +2,53 @@
 
 このセッション（〜2026-05-09）でやり残したものの記録。最終 PR レビューで指摘された v1.5 4項目（per-article エラー許容 / fetch_and_extract 一貫化 / graceful shutdown / health endpoint）と Spotify URI / Bandcamp 正規化 / RSS 切替は実施済み。以下は未着手。
 
+## ZINE リデザインセッション（〜2026-05-10）の引き継ぎ
+
+ZINE リデザイン（spec / plan は `docs/superpowers/2026-05-09-zine-*.md`）と Tailwind v4 導入は本番デプロイ済み。以下が残り。
+
+### 中優先度
+
+- [ ] **PR ベース開発フローへ移行**
+  - `git push origin main` が「PR レビュー飛ばす」理由でブロックされた。今は個人作業前提で main 直プッシュしとるが、レビュー観点では feature branch + PR が正道。
+  - 対処: GitHub Actions で `cargo test --features ssr` ＋ `cargo leptos build` を走らせる workflow と一緒に整備。`main` を保護ブランチ化する選択肢もあり
+
+- [ ] **空状態 UI**
+  - DB に推しが0件の時、現状は空 `<ul>` が描画されるだけで何も出ん。「まだ推しが集まっとらんずら」みてぇな案内が欲しい
+  - 場所: `src/pages/home.rs` の `RecommendationGrid`
+  - 対処: `items.is_empty()` 分岐を追加
+
+- [ ] **ジャケ画像の alt テキスト**
+  - 現在 `<img alt="">`（装飾扱い）。スクリーンリーダ向けにアーティスト＋アルバム名を入れた方がアクセシブル
+  - 場所: `src/pages/home.rs` の `<img>` 行
+  - 対処: `alt=format!("{} - {}", item.artist_name, item.album_name.as_deref().unwrap_or(""))`
+
+### 低優先度
+
+- [ ] **ファビコン・OGP 画像の更新**
+  - ZINE デザインに合うアイコン／OGP がまだ無い（あるいは旧デザイン依拠）。SNS シェア時の見栄えに影響
+  - 場所: `assets/`、`<head>` への `<link rel="icon">` / `<meta property="og:*">` 追加
+
+- [ ] **視覚回帰テスト**
+  - Tailwind v4 やブレイクポイント変更で意図せぬ崩れが起きとらんか自動検出する手段が無い
+  - 候補: Playwright screenshot diff を CI に組み込む
+
+- [ ] **本番でジャケなしレコードの実機確認**
+  - dev DB を直接編集して動作は確認済みじゃが、本番は全件 Spotify マッチ済みのため未踏。次に Spotify miss 出た時に画面崩れんか確認
+
+### 気づき・注意点（実装ノート）
+
+- **cargo-leptos 0.3.6 のデフォルト Tailwind は v4**（v3 ではない）。v4 は CSS-first 設定 (`@theme` ブロック) が標準で、JS config (`tailwind.config.js`) は実質無視される。バージョン上げる時は v3→v4 とは別の互換性確認が要る
+- **v4 のブレイクポイントは `@media (width >= 600px)` range syntax**。Chrome 104+/Firefox 102+/Safari 16.4+ 必須。古い Safari ユーザを切る判断はしとらんが、現状は問題なし
+- **`--breakpoint-sm: initial;` で v4 デフォルト（sm/md/lg/xl/2xl）を封じとる**。今後 utility 増やす時にハマる可能性。封じとる事実は `style/tailwind.css` 冒頭で明示
+- **`@source "./src/**/*.rs"` で .rs を検出対象に明示追加**しとる。動的にクラス名組み立てる場面が出たら safelist が要る（今は静的のみ）
+- **SQLite WAL モード**: `cp app.db` でバックアップ・復元する時、WAL 内の変更が反映され続けて期待通りに戻らんことがある。`sqlite3 .backup` か WAL チェックポイント後にコピーするのが正解
+- **CSS バンドルサイズ**: 旧 `main.css` 1.2KB → 新 `tailwind.css` ビルド後 15.5KB。本番では gzip が効く想定で実害は無いが、定期的に出力サイズ眺める習慣をつけたほうがええ
+- **Docker image サイズ**: Tailwind 入れても 39MB 据え置き（cargo-leptos が tailwindcss バイナリをビルド時にだけ使うため、ランタイム image には含まれん）
+
+### スコープ外として保留
+
+- **ダークモード対応** — クラフト紙質感が `prefers-color-scheme: dark` と相性悪いけぇ、対応するなら別デザインの ZINE「夜版」を切るレベルの作業。今回はやらん
+
 ## 中優先度（運用上、いずれ噛む）
 
 - [ ] **Spotify Search のクエリエスケープ**
