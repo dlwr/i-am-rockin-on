@@ -13,15 +13,48 @@ const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 
 static REVIEW_URL_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"/reviews/albums/([a-z0-9][a-z0-9-]*)/"#).unwrap());
-static SCORE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#""musicRating"\s*:\s*\{[^}]*"score"\s*:\s*([0-9]+(?:\.[0-9]+)?)"#).unwrap());
-static ARTIST_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#""headerProps"\s*:\s*\{[^}]*?"artists"\s*:\s*\[\s*\{[^}]*?"name"\s*:\s*"([^"]+)""#).unwrap());
-static DANGEROUS_HED_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#""dangerousHed"\s*:\s*"((?:[^"\\]|\\.)*)""#).unwrap());
-static EM_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"\\u003C(?:em|i|strong|b)\\u003E|\\u003C/(?:em|i|strong|b)\\u003E|<(?:em|i|strong|b)>|</(?:em|i|strong|b)>"#).unwrap()
-});
+static EM_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"<(?:em|i|strong|b)>|</(?:em|i|strong|b)>"#).unwrap());
+
+/// `window.__PRELOADED_STATE__ = {...};` ブロックを brace-balance スキャンで切り出して JSON parse。
+///
+/// regex で nested object を navigate しようとすると、`headerProps.artists[0].genres[0].node.name`
+/// のような同名キーを誤マッチしてアーティスト名にジャンル名が入る事故が起きる。実機 HTML 検証で発覚。
+fn extract_preloaded_state(html: &str) -> Option<serde_json::Value> {
+    let marker = "window.__PRELOADED_STATE__";
+    let after = &html[html.find(marker)? + marker.len()..];
+    let bytes = after.as_bytes();
+    let start = after.find('{')?;
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escape = false;
+    let mut end = None;
+    for (i, &c) in bytes.iter().enumerate().skip(start) {
+        if in_string {
+            if escape {
+                escape = false;
+            } else if c == b'\\' {
+                escape = true;
+            } else if c == b'"' {
+                in_string = false;
+            }
+        } else {
+            match c {
+                b'"' => in_string = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    serde_json::from_str(&after[start..end?]).ok()
+}
 
 pub fn extract_review_urls(index_html: &str) -> Vec<String> {
     let mut seen = HashSet::new();
@@ -35,24 +68,34 @@ pub fn extract_review_urls(index_html: &str) -> Vec<String> {
     out
 }
 
+/// 実 Pitchfork ではアルバムレビューの主要フィールドが
+/// `__PRELOADED_STATE__.transformed.review.headerProps` 配下に入っとる。
+/// レイアウト変更に弱いので、この一箇所だけ pointer 文字列を集中させる。
+fn review_header(state: &serde_json::Value) -> Option<&serde_json::Value> {
+    state.pointer("/transformed/review/headerProps")
+}
+
 pub fn extract_score(review_html: &str) -> Option<f32> {
-    SCORE_RE
-        .captures(review_html)?
-        .get(1)?
-        .as_str()
-        .parse::<f32>()
-        .ok()
+    let state = extract_preloaded_state(review_html)?;
+    review_header(&state)?
+        .pointer("/musicRating/score")?
+        .as_f64()
+        .map(|v| v as f32)
 }
 
 pub fn extract_artist(review_html: &str) -> Option<String> {
-    ARTIST_RE
-        .captures(review_html)?
-        .get(1)
-        .map(|m| m.as_str().to_string())
+    let state = extract_preloaded_state(review_html)?;
+    review_header(&state)?
+        .pointer("/artists/0/name")?
+        .as_str()
+        .map(String::from)
 }
 
 pub fn extract_album(review_html: &str) -> Option<String> {
-    let raw = DANGEROUS_HED_RE.captures(review_html)?.get(1)?.as_str();
+    let state = extract_preloaded_state(review_html)?;
+    let raw = review_header(&state)?
+        .pointer("/dangerousHed")?
+        .as_str()?;
     let stripped = EM_TAG_RE.replace_all(raw, "");
     let trimmed = stripped.trim();
     if trimmed.is_empty() {
