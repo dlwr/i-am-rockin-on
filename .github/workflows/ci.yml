@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_LEPTOS_VERSION: "0.3.6"
+  DATABASE_URL: "sqlite:./data/app.db"
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.95
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --version "^0.8" --no-default-features --features rustls,sqlite --locked
+
+      - name: Install cargo-leptos
+        run: curl -fsSL "https://github.com/leptos-rs/cargo-leptos/releases/download/v${CARGO_LEPTOS_VERSION}/cargo-leptos-installer.sh" | bash
+
+      - name: Prepare SQLite database
+        run: |
+          mkdir -p data
+          sqlx database create
+          sqlx migrate run
+
+      - name: Check SQLx offline metadata
+        run: cargo sqlx prepare --check -- --features ssr
+
+      - name: Run tests
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo test --features ssr
+
+      - name: Build with cargo-leptos
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo leptos build
