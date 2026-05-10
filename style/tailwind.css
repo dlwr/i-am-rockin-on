@@ -61,4 +61,9 @@
       transform: none;
     }
   }
+
+  details.group[open] > summary {
+    background-color: var(--color-ink);
+    color: var(--color-paper);
+  }
 }

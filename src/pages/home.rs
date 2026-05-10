@@ -214,11 +214,9 @@ fn SourceMenu(sources: Vec<SourceLinkView>) -> impl IntoView {
         }.into_any();
     }
     view! {
-        <details class="relative group [&[open]>summary]:bg-ink [&[open]>summary]:text-paper">
+        <details class="relative group">
             <summary
                 class="text-xs font-semibold px-2.5 py-1 rounded-full border border-ink text-ink cursor-pointer list-none select-none group-hover:bg-ink group-hover:text-paper"
-                role="button"
-                aria-haspopup="true"
             >
                 "記事"
             </summary>
