@@ -17,6 +17,7 @@ async fn main() -> anyhow::Result<()> {
     use leptos_axum::{generate_route_list, LeptosRoutes};
     use std::str::FromStr;
     use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -39,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
     ));
     let repo = Arc::new(RecommendationRepo::new(pool.clone()));
     let log = Arc::new(ScrapeLog::new(pool.clone()));
+    let cancel = CancellationToken::new();
 
     let rokinon_source: Arc<dyn MediaSource> = Arc::new(RokinonAdapter::new());
     let rokinon_pipeline = Arc::new(ScrapePipeline {
@@ -46,6 +48,7 @@ async fn main() -> anyhow::Result<()> {
         resolver: resolver.clone(),
         repo: repo.clone(),
         log: log.clone(),
+        cancel: cancel.clone(),
     });
 
     let pitchfork_source: Arc<dyn MediaSource> = Arc::new(PitchforkAdapter::new(
@@ -58,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
         resolver: resolver.clone(),
         repo: repo.clone(),
         log: log.clone(),
+        cancel: cancel.clone(),
     });
 
     {
@@ -125,9 +129,14 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("listening on http://{}", &addr);
-    let shutdown = async {
-        let _ = tokio::signal::ctrl_c().await;
-        tracing::info!("shutdown signal received");
+    let shutdown = {
+        let cancel = cancel.clone();
+        async move {
+            let _ = tokio::signal::ctrl_c().await;
+            tracing::info!("shutdown signal received");
+            // 走行中の cron スクレイプに中断を通知。 候補ループ前後で観測される。
+            cancel.cancel();
+        }
     };
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(shutdown)
