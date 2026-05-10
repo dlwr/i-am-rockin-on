@@ -8,6 +8,8 @@ pub struct Config {
     pub pitchfork_score_threshold: f32,
     pub pitchfork_recency_days: i64,
     pub pitchfork_max_pages: u32,
+    /// 候補処理の合間に挟むレートリミット用 sleep。 短くすると検証時の運用が速くなる
+    pub scrape_throttle_ms: u64,
 }
 
 impl Config {
@@ -31,6 +33,10 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse::<u32>().ok())
                 .unwrap_or(3),
+            scrape_throttle_ms: std::env::var("SCRAPE_THROTTLE_MS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(800),
         })
     }
 }
@@ -56,10 +62,12 @@ mod tests {
         let saved_threshold = std::env::var("PITCHFORK_SCORE_THRESHOLD").ok();
         let saved_recency = std::env::var("PITCHFORK_RECENCY_DAYS").ok();
         let saved_pages = std::env::var("PITCHFORK_MAX_PAGES").ok();
+        let saved_throttle = std::env::var("SCRAPE_THROTTLE_MS").ok();
         let saved_db = std::env::var("DATABASE_URL").ok();
         std::env::remove_var("PITCHFORK_SCORE_THRESHOLD");
         std::env::remove_var("PITCHFORK_RECENCY_DAYS");
         std::env::remove_var("PITCHFORK_MAX_PAGES");
+        std::env::remove_var("SCRAPE_THROTTLE_MS");
         std::env::set_var("DATABASE_URL", "sqlite::memory:");
         std::env::set_var("SPOTIFY_CLIENT_ID", "x");
         std::env::set_var("SPOTIFY_CLIENT_SECRET", "y");
@@ -68,10 +76,12 @@ mod tests {
         assert!((cfg.pitchfork_score_threshold - 8.0).abs() < f32::EPSILON);
         assert_eq!(cfg.pitchfork_recency_days, 90);
         assert_eq!(cfg.pitchfork_max_pages, 3);
+        assert_eq!(cfg.scrape_throttle_ms, 800);
 
         if let Some(v) = saved_threshold { std::env::set_var("PITCHFORK_SCORE_THRESHOLD", v); }
         if let Some(v) = saved_recency { std::env::set_var("PITCHFORK_RECENCY_DAYS", v); }
         if let Some(v) = saved_pages { std::env::set_var("PITCHFORK_MAX_PAGES", v); }
+        if let Some(v) = saved_throttle { std::env::set_var("SCRAPE_THROTTLE_MS", v); }
         if let Some(v) = saved_db { std::env::set_var("DATABASE_URL", v); } else { std::env::remove_var("DATABASE_URL"); }
     }
 }
