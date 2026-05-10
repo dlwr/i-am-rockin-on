@@ -23,8 +23,9 @@ echo 'SPOTIFY_CLIENT_SECRET=...' >> .env
 # 開発サーバ
 mise run dev
 
-# 手動スクレイプ
+# 手動スクレイプ（既定: rokinon）
 mise run scrape
+# 別ソース指定: cargo run --features ssr --bin scrape -- --source pitchfork
 
 # テスト
 mise run test

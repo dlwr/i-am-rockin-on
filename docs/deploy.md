@@ -30,4 +30,15 @@ SELECT count(*) FROM recommendations;
 
 ```
 flyctl ssh console -C "/app/scrape --source rokinon"
+flyctl ssh console -C "/app/scrape --source pitchfork"
 ```
+
+## 設定変更系の環境変数（任意）
+
+| 変数 | 既定 | 説明 |
+|---|---|---|
+| `PITCHFORK_SCORE_THRESHOLD` | `8.0` | Pitchfork で取り込む下限スコア |
+| `PITCHFORK_RECENCY_DAYS` | `90` | 公開日からの取り込み許容日数 |
+| `PITCHFORK_MAX_PAGES` | `3` | レビュー一覧ページ巡回数 |
+
+`flyctl secrets set PITCHFORK_SCORE_THRESHOLD=8.5` のように上書き可能。
