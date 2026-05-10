@@ -4,12 +4,15 @@ use crate::server::resolver::spotify::SpotifyResolver;
 use crate::server::scrape_log::ScrapeLog;
 use crate::server::store::RecommendationRepo;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 pub struct ScrapePipeline {
     pub source: Arc<dyn MediaSource>,
     pub resolver: Arc<SpotifyResolver>,
     pub repo: Arc<RecommendationRepo>,
     pub log: Arc<ScrapeLog>,
+    /// SIGTERM で main から cancel される。 candidate ループ前後で観測して途中離脱する
+    pub cancel: CancellationToken,
 }
 
 #[derive(Debug, Default)]
@@ -48,6 +51,13 @@ impl ScrapePipeline {
         let candidates_count = candidates.len();
         let mut outcome = ScrapeOutcome::default();
         for c in candidates {
+            if self.cancel.is_cancelled() {
+                tracing::info!(
+                    source_id = self.source.id(),
+                    "scrape cancelled mid-loop; exiting early"
+                );
+                return Ok(outcome);
+            }
             match self.process_candidate(&c).await {
                 Ok(ProcessResult::Skipped) => outcome.items_skipped += 1,
                 Ok(ProcessResult::Inserted) => outcome.items_added += 1,
@@ -183,6 +193,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pipeline_exits_loop_when_cancellation_is_requested_before_run() {
+        let pool = SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+
+        // Spotify resolver はモックしないが、ループに入らずに済むはずなので叩かれない
+        let resolver = SpotifyResolver::new("id".into(), "sec".into());
+
+        // 候補 3 件を仕込んだ FakeSource。 キャンセル後は 1 件も処理されないことを期待する。
+        let items = (0..3)
+            .map(|i| NewRecommendation {
+                source_id: "fake".into(),
+                source_url: format!("https://example.com/{i}"),
+                source_external_id: i.to_string(),
+                featured_at: NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+                artist_name: "Foo".into(),
+                album_name: Some("Bar".into()),
+                track_name: None,
+                spotify_url: None,
+                spotify_image_url: None,
+                youtube_url: None,
+            })
+            .collect();
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel(); // run 前に cancel しとく
+
+        let pipeline = ScrapePipeline {
+            source: Arc::new(FakeSource { items }),
+            resolver: Arc::new(resolver),
+            repo: Arc::new(RecommendationRepo::new(pool.clone())),
+            log: Arc::new(ScrapeLog::new(pool)),
+            cancel,
+        };
+        let outcome = pipeline.run().await.unwrap();
+        assert_eq!(outcome.items_added, 0, "cancelled → no insert");
+        assert_eq!(outcome.items_updated, 0, "cancelled → no update");
+        assert_eq!(outcome.items_skipped, 0, "cancelled は skipped にカウントしない");
+    }
+
+    #[tokio::test]
     async fn pipeline_records_added_count_when_spotify_album_matches() {
         let pool = SqlitePoolOptions::new()
             .connect("sqlite::memory:")
@@ -235,6 +288,7 @@ mod tests {
             resolver: Arc::new(resolver),
             repo: Arc::new(RecommendationRepo::new(pool.clone())),
             log: Arc::new(ScrapeLog::new(pool)),
+            cancel: tokio_util::sync::CancellationToken::new(),
         };
         let outcome = pipeline.run().await.unwrap();
         assert_eq!(outcome.items_added, 1);
@@ -291,6 +345,7 @@ mod tests {
             resolver: Arc::new(resolver),
             repo: Arc::new(RecommendationRepo::new(pool.clone())),
             log: Arc::new(ScrapeLog::new(pool)),
+            cancel: tokio_util::sync::CancellationToken::new(),
         };
         let outcome = pipeline.run().await.unwrap();
         assert_eq!(outcome.items_added, 0, "Spotify miss must not save row");
@@ -439,6 +494,7 @@ mod tests {
             resolver: Arc::new(resolver),
             repo: Arc::new(RecommendationRepo::new(pool.clone())),
             log: Arc::new(ScrapeLog::new(pool)),
+            cancel: tokio_util::sync::CancellationToken::new(),
         };
         let outcome = pipeline.run().await.unwrap();
         assert_eq!(outcome.items_added, 2, "two ok candidates should insert");

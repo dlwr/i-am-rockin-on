@@ -58,6 +58,8 @@ async fn main() -> anyhow::Result<()> {
         resolver,
         repo,
         log,
+        // CLI 一発実行は SIGTERM で中断したい場面が無いけぇ never-cancelled でよい
+        cancel: tokio_util::sync::CancellationToken::new(),
     };
     let outcome = pipeline.run().await?;
     println!(
