@@ -2,11 +2,12 @@
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     use axum::Router;
+    use i_am_rockin_on::server::adapter::pitchfork::PitchforkAdapter;
     use i_am_rockin_on::server::adapter::rokinon::RokinonAdapter;
     use i_am_rockin_on::server::adapter::source::MediaSource;
     use i_am_rockin_on::server::config::Config;
     use i_am_rockin_on::server::resolver::spotify::SpotifyResolver;
-    use i_am_rockin_on::server::scheduler::{install_daily_scrape, run_initial_scrape_if_empty};
+    use i_am_rockin_on::server::scheduler::{add_scrape_job, new_scheduler, run_initial_scrape_if_empty};
     use i_am_rockin_on::server::scrape::ScrapePipeline;
     use i_am_rockin_on::server::scrape_log::ScrapeLog;
     use i_am_rockin_on::server::store::RecommendationRepo;
@@ -31,31 +32,56 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     sqlx::migrate!().run(&pool).await?;
 
-    let source: Arc<dyn MediaSource> = Arc::new(RokinonAdapter::new());
     let resolver = Arc::new(SpotifyResolver::new(
-        cfg.spotify_client_id,
-        cfg.spotify_client_secret,
+        cfg.spotify_client_id.clone(),
+        cfg.spotify_client_secret.clone(),
     ));
     let repo = Arc::new(RecommendationRepo::new(pool.clone()));
     let log = Arc::new(ScrapeLog::new(pool.clone()));
-    let pipeline = Arc::new(ScrapePipeline {
-        source: source.clone(),
-        resolver,
+
+    let rokinon_source: Arc<dyn MediaSource> = Arc::new(RokinonAdapter::new());
+    let rokinon_pipeline = Arc::new(ScrapePipeline {
+        source: rokinon_source,
+        resolver: resolver.clone(),
         repo: repo.clone(),
         log: log.clone(),
     });
 
-    // 初回起動時のみフルスクレイプ
-    let init_pipe = pipeline.clone();
-    let init_log = log.clone();
-    tokio::spawn(async move {
-        if let Err(e) = run_initial_scrape_if_empty(init_pipe, init_log, "rokinon").await {
-            tracing::error!(error = %e, "initial scrape failed");
-        }
+    let pitchfork_source: Arc<dyn MediaSource> = Arc::new(PitchforkAdapter::new(
+        cfg.pitchfork_score_threshold,
+        cfg.pitchfork_recency_days,
+        cfg.pitchfork_max_pages,
+    ));
+    let pitchfork_pipeline = Arc::new(ScrapePipeline {
+        source: pitchfork_source,
+        resolver: resolver.clone(),
+        repo: repo.clone(),
+        log: log.clone(),
     });
 
-    // 日次 cron
-    let _sched = install_daily_scrape(pipeline.clone()).await?;
+    {
+        let p = rokinon_pipeline.clone();
+        let l = log.clone();
+        tokio::spawn(async move {
+            if let Err(e) = run_initial_scrape_if_empty(p, l, "rokinon").await {
+                tracing::error!(error = %e, "initial rokinon scrape failed");
+            }
+        });
+    }
+    {
+        let p = pitchfork_pipeline.clone();
+        let l = log.clone();
+        tokio::spawn(async move {
+            if let Err(e) = run_initial_scrape_if_empty(p, l, "pitchfork").await {
+                tracing::error!(error = %e, "initial pitchfork scrape failed");
+            }
+        });
+    }
+
+    let scheduler = new_scheduler().await?;
+    add_scrape_job(&scheduler, rokinon_pipeline.clone(), "0 0 19 * * *").await?;
+    add_scrape_job(&scheduler, pitchfork_pipeline.clone(), "0 0 7 * * *").await?;
+    let _sched = scheduler;
 
     let conf = get_configuration(None).unwrap();
     let leptos_options = conf.leptos_options;
@@ -81,8 +107,6 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("listening on http://{}", &addr);
-    // HTTP に graceful shutdown を配線。cron スケジューラの裏タスクは
-    // runtime drop でアボートされる（取りこぼし許容）。完全な cancel 伝播は v2 で。
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("shutdown signal received");
