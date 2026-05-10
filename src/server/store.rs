@@ -107,26 +107,6 @@ impl RecommendationRepo {
         Ok((saved, was_inserted))
     }
 
-    pub async fn list_recent(&self, limit: i64) -> AppResult<Vec<Recommendation>> {
-        let rows = sqlx::query_as!(
-            Recommendation,
-            r#"SELECT id as "id!", source_id, source_url, source_external_id,
-                      featured_at as "featured_at: chrono::NaiveDate",
-                      artist_name, album_name, track_name,
-                      spotify_url, spotify_image_url, youtube_url,
-                      manual_override as "manual_override!: bool",
-                      created_at as "created_at: chrono::DateTime<chrono::Utc>",
-                      updated_at as "updated_at: chrono::DateTime<chrono::Utc>"
-               FROM recommendations
-               ORDER BY featured_at DESC, id DESC
-               LIMIT ?"#,
-            limit,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
-    }
-
     pub async fn list_recent_albums(&self, limit: i64) -> AppResult<Vec<crate::domain::album_card::AlbumCard>> {
         use crate::domain::album_card::{AlbumCard, SourceLink};
         use crate::server::error::AppError;
