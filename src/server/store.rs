@@ -190,10 +190,10 @@ impl RecommendationRepo {
             let head = raw.first().ok_or_else(|| AppError::Parse("empty group".into()))?;
             out.push(AlbumCard {
                 artist_name: head.artist_name.clone(),
-                album_name: head.album_name.clone(),
-                spotify_url: head.spotify_url.clone(),
-                spotify_image_url: head.spotify_image_url.clone(),
-                youtube_url: head.youtube_url.clone(),
+                album_name: raw.iter().find_map(|r| r.album_name.clone()),
+                spotify_url: raw.iter().find_map(|r| r.spotify_url.clone()),
+                spotify_image_url: raw.iter().find_map(|r| r.spotify_image_url.clone()),
+                youtube_url: raw.iter().find_map(|r| r.youtube_url.clone()),
                 featured_at: head.featured_at,
                 sources: raw.iter().map(|r| SourceLink {
                     source_id: r.source_id.clone(),
@@ -331,6 +331,32 @@ mod tests {
         let cards = repo.list_recent_albums(10).await.unwrap();
         assert_eq!(cards.len(), 1, "normalized artist+album must merge");
         assert_eq!(cards[0].sources.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_recent_albums_coalesces_optional_fields_across_sources() {
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool);
+        // Head (newest) row has no youtube_url; sibling has one. Merged card must surface it.
+        let url = "https://open.spotify.com/album/zzz";
+        let mut older = sample_with(
+            "rokinon", "r1", "Foo", Some("Bar"),
+            Some(url), NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+        );
+        older.youtube_url = Some("https://youtu.be/old".into());
+        repo.upsert(older).await.unwrap();
+        let mut newer = sample_with(
+            "pitchfork", "p1", "Foo", Some("Bar"),
+            Some(url), NaiveDate::from_ymd_opt(2026, 5, 8).unwrap(),
+        );
+        newer.youtube_url = None;
+        repo.upsert(newer).await.unwrap();
+
+        let cards = repo.list_recent_albums(10).await.unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].sources[0].source_id, "pitchfork", "head must be newest");
+        assert_eq!(cards[0].youtube_url.as_deref(), Some("https://youtu.be/old"),
+            "youtube_url must coalesce from older sibling when head is None");
     }
 
     #[tokio::test]
