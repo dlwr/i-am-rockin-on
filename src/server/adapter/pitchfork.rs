@@ -316,6 +316,23 @@ mod tests {
         );
     }
 
+    /// 実 Pitchfork からダウンロードした 1 ページに対して 4 つの extract 関数を全部
+    /// 食わせる regression test。 手作り fixture と実機構造のズレ
+    /// (artists 配下 genres ネスト無し / musicRating の path 違い等) を検出する。
+    /// fixture 更新は `curl -A '<UA>' https://pitchfork.com/reviews/albums/<slug>/`
+    /// で同じ URL を再取得すれば足りる。
+    #[test]
+    fn extract_functions_handle_realistic_pitchfork_html() {
+        let html = fixture("realistic_full.html");
+        assert_eq!(extract_score(&html), Some(9.0));
+        assert_eq!(extract_artist(&html), Some("Aldous Harding".to_string()));
+        assert_eq!(extract_album(&html), Some("Train on the Island".to_string()));
+        assert_eq!(
+            extract_publish_date(&html),
+            Some(NaiveDate::from_ymd_opt(2026, 5, 8).unwrap()),
+        );
+    }
+
     #[tokio::test]
     async fn list_candidates_fetches_index_and_extracts_urls() {
         use crate::server::adapter::source::MediaSource;
