@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH keyed AS (\n                SELECT\n                    COALESCE(\n                        spotify_url,\n                        lower(trim(artist_name)) || '|' || lower(trim(coalesce(album_name, '')))\n                    ) AS dedup_key,\n                    source_id,\n                    source_url,\n                    artist_name,\n                    album_name,\n                    spotify_url,\n                    spotify_image_url,\n                    youtube_url,\n                    featured_at\n                FROM recommendations\n            )\n            SELECT\n                dedup_key AS \"dedup_key!: String\",\n                MAX(featured_at) AS \"latest_featured_at!: chrono::NaiveDate\",\n                json_group_array(json_object(\n                    'source_id', source_id,\n                    'source_url', source_url,\n                    'artist_name', artist_name,\n                    'album_name', album_name,\n                    'spotify_url', spotify_url,\n                    'spotify_image_url', spotify_image_url,\n                    'youtube_url', youtube_url,\n                    'featured_at', featured_at\n                )) AS \"rows_json!: String\"\n            FROM keyed\n            GROUP BY dedup_key\n            ORDER BY MAX(featured_at) DESC, dedup_key ASC\n            LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "dedup_key!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "latest_featured_at!: chrono::NaiveDate",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "rows_json!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f0008f5702e49644ece50d60690954b390051c076b472ebabf2acfb41046e64b"
+}
