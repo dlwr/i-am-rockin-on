@@ -7,15 +7,20 @@ use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use tokio::sync::Mutex;
 
 const ROKINON_BASE: &str = "https://ameblo.jp/stamedba";
 const USER_AGENT: &str = "i-am-rockin-on bot/1.0 (+https://github.com/dlwr/i-am-rockin-on)";
 
+static OSHI_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d{4})(\d{2})推し").unwrap());
+static ENTRY_ID_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"entry-(\d+)\.html").unwrap());
+
 /// 記事本文 HTML から `YYYYMM推し` パターンを探し、その月の1日を NaiveDate で返す。
 pub fn detect_oshi(entry_text: &str) -> Option<NaiveDate> {
-    let re = Regex::new(r"(\d{4})(\d{2})推し").unwrap();
-    let caps = re.captures(entry_text)?;
+    let caps = OSHI_PATTERN.captures(entry_text)?;
     let year: i32 = caps[1].parse().ok()?;
     let month: u32 = caps[2].parse().ok()?;
     NaiveDate::from_ymd_opt(year, month, 1)
@@ -115,8 +120,7 @@ impl RokinonAdapter {
     }
 
     fn entry_id_from_link(link: &str) -> Option<String> {
-        let re = Regex::new(r"entry-(\d+)\.html").ok()?;
-        re.captures(link)?.get(1).map(|m| m.as_str().to_string())
+        ENTRY_ID_PATTERN.captures(link)?.get(1).map(|m| m.as_str().to_string())
     }
 }
 
