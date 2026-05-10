@@ -164,9 +164,62 @@ impl MediaSource for PitchforkAdapter {
 
     async fn fetch_and_extract(
         &self,
-        _candidate: &CandidateRef,
+        candidate: &CandidateRef,
     ) -> AppResult<Option<NewRecommendation>> {
-        Ok(None)
+        let resp = self.client.get(&candidate.source_url).send().await?;
+        if !resp.status().is_success() {
+            return Err(crate::server::error::AppError::Parse(format!(
+                "pitchfork detail HTTP {}",
+                resp.status()
+            )));
+        }
+        let body = resp.text().await?;
+
+        let score = match extract_score(&body) {
+            Some(s) => s,
+            None => {
+                tracing::warn!(url = %candidate.source_url, "score not found");
+                return Ok(None);
+            }
+        };
+        if score < self.score_threshold {
+            return Ok(None);
+        }
+
+        let publish_date = match extract_publish_date(&body) {
+            Some(d) => d,
+            None => {
+                tracing::warn!(url = %candidate.source_url, "publish date not found");
+                return Ok(None);
+            }
+        };
+        let today = chrono::Utc::now().date_naive();
+        let age_days = (today - publish_date).num_days();
+        if age_days > self.recency_days {
+            return Ok(None);
+        }
+
+        let artist = match extract_artist(&body) {
+            Some(a) => a,
+            None => {
+                tracing::warn!(url = %candidate.source_url, "artist not found");
+                return Ok(None);
+            }
+        };
+        let album = extract_album(&body);
+
+        Ok(Some(NewRecommendation {
+            source_id: "pitchfork".into(),
+            source_url: candidate.source_url.clone(),
+            source_external_id: candidate.source_external_id.clone(),
+            featured_at: publish_date,
+            artist_name: artist,
+            album_name: album,
+            track_name: None,
+            spotify_url: None,
+            spotify_image_url: None,
+            youtube_url: None,
+        }))
     }
 }
 
@@ -236,5 +289,64 @@ mod tests {
         assert_eq!(cands.len(), 2);
         assert!(cands.iter().any(|c| c.source_external_id == "aldous-harding-train-on-the-island"));
         assert!(cands.iter().all(|c| c.source_url.starts_with(&server.uri())));
+    }
+
+    #[tokio::test]
+    async fn fetch_and_extract_returns_recommendation_for_high_score_recent_review() {
+        use crate::server::adapter::source::{CandidateRef, MediaSource};
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(path("/reviews/albums/aldous-harding-train-on-the-island/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(fixture("review_high.html")))
+            .mount(&server)
+            .await;
+
+        let adapter = PitchforkAdapter::with_base_url(server.uri(), 8.0, 10_000, 1);
+        let cand = CandidateRef {
+            source_external_id: "aldous-harding-train-on-the-island".into(),
+            source_url: format!("{}/reviews/albums/aldous-harding-train-on-the-island/", server.uri()),
+        };
+        let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
+        assert_eq!(rec.source_id, "pitchfork");
+        assert_eq!(rec.source_external_id, "aldous-harding-train-on-the-island");
+        assert_eq!(rec.artist_name, "Aldous Harding");
+        assert_eq!(rec.album_name.as_deref(), Some("Train on the Island"));
+        assert_eq!(rec.featured_at, NaiveDate::from_ymd_opt(2026, 5, 8).unwrap());
+    }
+
+    #[tokio::test]
+    async fn fetch_and_extract_skips_low_score_review() {
+        use crate::server::adapter::source::{CandidateRef, MediaSource};
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(path("/reviews/albums/some-low-score/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(fixture("review_low.html")))
+            .mount(&server)
+            .await;
+
+        let adapter = PitchforkAdapter::with_base_url(server.uri(), 8.0, 10_000, 1);
+        let cand = CandidateRef {
+            source_external_id: "some-low-score".into(),
+            source_url: format!("{}/reviews/albums/some-low-score/", server.uri()),
+        };
+        assert!(adapter.fetch_and_extract(&cand).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_and_extract_skips_old_review_outside_recency_window() {
+        use crate::server::adapter::source::{CandidateRef, MediaSource};
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(path("/reviews/albums/old-artist-old-album/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(fixture("review_high_old.html")))
+            .mount(&server)
+            .await;
+
+        let adapter = PitchforkAdapter::with_base_url(server.uri(), 8.0, 90, 1);
+        let cand = CandidateRef {
+            source_external_id: "old-artist-old-album".into(),
+            source_url: format!("{}/reviews/albums/old-artist-old-album/", server.uri()),
+        };
+        assert!(adapter.fetch_and_extract(&cand).await.unwrap().is_none());
     }
 }
