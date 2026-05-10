@@ -79,8 +79,22 @@ impl ScrapePipeline {
                     new_rec.track_name = m.track_name;
                 }
             }
-            Ok(None) => tracing::info!(artist = %new_rec.artist_name, "spotify match not found"),
-            Err(e) => tracing::warn!(error = %e, "spotify resolve failed; saving without"),
+            Ok(None) => {
+                tracing::info!(
+                    artist = %new_rec.artist_name,
+                    album = ?new_rec.album_name,
+                    "spotify album match not found; skipping recommendation"
+                );
+                return Ok(ProcessResult::Skipped);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    artist = %new_rec.artist_name,
+                    "spotify resolve failed; skipping recommendation (will retry next scrape)"
+                );
+                return Ok(ProcessResult::Skipped);
+            }
         }
         let (_, inserted) = self.repo.upsert(new_rec).await?;
         Ok(if inserted {
@@ -129,7 +143,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pipeline_records_added_count() {
+    async fn pipeline_records_added_count_when_spotify_album_matches() {
         let pool = SqlitePoolOptions::new()
             .connect("sqlite::memory:")
             .await
@@ -151,8 +165,10 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/search"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "albums": { "items": [] },
-                "tracks": { "items": [] }
+                "albums": { "items": [{
+                    "external_urls": { "spotify": "https://open.spotify.com/album/abc" },
+                    "images": [{ "url": "https://i.scdn.co/image/abc.jpg" }]
+                }] }
             })))
             .mount(&server)
             .await;
@@ -168,7 +184,7 @@ mod tests {
             source_external_id: "1".into(),
             featured_at: NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
             artist_name: "Foo".into(),
-            album_name: None,
+            album_name: Some("Bar".into()),
             track_name: None,
             spotify_url: None,
             spotify_image_url: None,
@@ -183,6 +199,62 @@ mod tests {
         let outcome = pipeline.run().await.unwrap();
         assert_eq!(outcome.items_added, 1);
         assert_eq!(outcome.items_updated, 0);
+    }
+
+    #[tokio::test]
+    async fn pipeline_skips_candidate_when_spotify_finds_no_album() {
+        let pool = SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "tok", "token_type": "Bearer", "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "albums": { "items": [] }
+            })))
+            .mount(&server)
+            .await;
+
+        let resolver = SpotifyResolver::new("id".into(), "sec".into()).with_endpoints(
+            format!("{}/token", server.uri()),
+            format!("{}/search", server.uri()),
+        );
+
+        let item = NewRecommendation {
+            source_id: "fake".into(),
+            source_url: "https://example.com/1".into(),
+            source_external_id: "1".into(),
+            featured_at: NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+            artist_name: "Mahito Yokota".into(),
+            album_name: Some("Super Mario Galaxy".into()),
+            track_name: None,
+            spotify_url: None,
+            spotify_image_url: None,
+            youtube_url: None,
+        };
+        let pipeline = ScrapePipeline {
+            source: Arc::new(FakeSource { items: vec![item] }),
+            resolver: Arc::new(resolver),
+            repo: Arc::new(RecommendationRepo::new(pool.clone())),
+            log: Arc::new(ScrapeLog::new(pool)),
+        };
+        let outcome = pipeline.run().await.unwrap();
+        assert_eq!(outcome.items_added, 0, "Spotify miss must not save row");
+        assert_eq!(outcome.items_skipped, 1);
     }
 
     #[tokio::test]
@@ -208,8 +280,10 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/search"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "albums": { "items": [] },
-                "tracks": { "items": [] }
+                "albums": { "items": [{
+                    "external_urls": { "spotify": "https://open.spotify.com/album/abc" },
+                    "images": [{ "url": "https://i.scdn.co/image/abc.jpg" }]
+                }] }
             })))
             .mount(&server)
             .await;
@@ -249,7 +323,7 @@ mod tests {
                         source_external_id: c.source_external_id.clone(),
                         featured_at: NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
                         artist_name: "Foo".into(),
-                        album_name: None,
+                        album_name: Some("Bar".into()),
                         track_name: None,
                         spotify_url: None,
                         spotify_image_url: None,

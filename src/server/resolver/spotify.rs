@@ -65,51 +65,31 @@ impl SpotifyResolver {
         Ok(resp.access_token)
     }
 
+    /// アーティスト＋アルバム名で Spotify アルバムを検索し、最初のヒットを返す。
+    /// album が None または ヒット 0 件の場合は None。
+    /// トラックへの fallback は行わない — 「配信されとらんアルバム」を誤マッチで救うんじゃなくて、
+    /// pipeline 側でスキップさせる前提。
     pub async fn resolve(&self, artist: &str, album: Option<&str>) -> AppResult<Option<SpotifyMatch>> {
+        let Some(album) = album else {
+            return Ok(None);
+        };
         let token = self.access_token().await?;
-        if let Some(album) = album {
-            let q = format!("artist:\"{}\" album:\"{}\"", artist, album);
-            let resp: AlbumsResp = self
-                .http
-                .get(&self.search_url)
-                .bearer_auth(&token)
-                .query(&[("q", q.as_str()), ("type", "album"), ("limit", "1")])
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-            if let Some(first) = resp.albums.items.into_iter().next() {
-                return Ok(Some(SpotifyMatch {
-                    url: first.external_urls.spotify,
-                    image_url: first.images.into_iter().next().map(|i| i.url),
-                    track_name: None,
-                }));
-            }
-        }
-        let q = format!(
-            "artist:\"{}\"{}",
-            artist,
-            album.map(|a| format!(" {}", a)).unwrap_or_default()
-        );
-        let resp: TracksResp = self
+        let q = format!("artist:\"{}\" album:\"{}\"", artist, album);
+        let resp: AlbumsResp = self
             .http
             .get(&self.search_url)
             .bearer_auth(&token)
-            .query(&[("q", q.as_str()), ("type", "track"), ("limit", "1")])
+            .query(&[("q", q.as_str()), ("type", "album"), ("limit", "1")])
             .send()
             .await?
             .error_for_status()?
             .json()
             .await?;
-        if let Some(t) = resp.tracks.items.into_iter().next() {
-            return Ok(Some(SpotifyMatch {
-                url: t.external_urls.spotify,
-                image_url: t.album.images.into_iter().next().map(|i| i.url),
-                track_name: Some(t.name),
-            }));
-        }
-        Ok(None)
+        Ok(resp.albums.items.into_iter().next().map(|first| SpotifyMatch {
+            url: first.external_urls.spotify,
+            image_url: first.images.into_iter().next().map(|i| i.url),
+            track_name: None,
+        }))
     }
 }
 
@@ -133,19 +113,6 @@ struct AlbumItem {
 struct ExternalUrls { spotify: String }
 #[derive(Debug, Deserialize)]
 struct Image { url: String }
-
-#[derive(Debug, Deserialize)]
-struct TracksResp { tracks: TrackPage }
-#[derive(Debug, Deserialize)]
-struct TrackPage { items: Vec<TrackItem> }
-#[derive(Debug, Deserialize)]
-struct TrackItem {
-    name: String,
-    external_urls: ExternalUrls,
-    album: TrackAlbum,
-}
-#[derive(Debug, Deserialize)]
-struct TrackAlbum { images: Vec<Image> }
 
 #[cfg(test)]
 mod tests {
@@ -216,7 +183,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_falls_back_to_track_when_album_empty() {
+    async fn resolve_returns_none_when_album_empty_without_falling_back_to_track() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/token"))
@@ -233,26 +200,28 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
-            .and(path("/search"))
-            .and(query_param("type", "track"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "tracks": { "items": [{
-                    "name": "Some Track",
-                    "external_urls": { "spotify": "https://open.spotify.com/track/xyz" },
-                    "album": { "images": [{ "url": "https://i.scdn.co/image/xyz.jpg" }] }
-                }]}
-            })))
-            .mount(&server)
-            .await;
+        // type=track のリクエストには応えない（来たら wiremock がエラーで test 落ちる）。
+        // これで「track 検索 fallback が走っとらん」ことを保証する。
 
         let r = SpotifyResolver::new("id".into(), "sec".into()).with_endpoints(
             format!("{}/token", server.uri()),
             format!("{}/search", server.uri()),
         );
-        let m = r.resolve("Foo", Some("Bar")).await.unwrap().unwrap();
-        assert_eq!(m.url, "https://open.spotify.com/track/xyz");
-        assert_eq!(m.track_name.unwrap(), "Some Track");
+        let m = r.resolve("Foo", Some("Bar")).await.unwrap();
+        assert!(m.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_returns_none_when_album_arg_is_none() {
+        let server = MockServer::start().await;
+        // album=None なら HTTP リクエスト自体走らないので、token endpoint も叩かれない。
+        // mount を空のままにして検証。
+        let r = SpotifyResolver::new("id".into(), "sec".into()).with_endpoints(
+            format!("{}/token", server.uri()),
+            format!("{}/search", server.uri()),
+        );
+        let m = r.resolve("Foo", None).await.unwrap();
+        assert!(m.is_none());
     }
 
     #[tokio::test]
