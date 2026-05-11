@@ -1,0 +1,34 @@
+name: Deploy
+
+# main への push 起源の CI が成功で完了した時にだけ走る。
+# PR 段階の CI 成功では deploy しない (branches: [main] フィルタ)。
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+# fly deploy は途中で kill すると blue-green が中途半端な状態で残る可能性がある。
+# 連続 merge で重なったら cancel せず順番に流す。
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: flyctl deploy
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
