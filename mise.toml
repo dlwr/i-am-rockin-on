@@ -29,3 +29,8 @@ run = "mkdir -p data && sqlx database create"
 [tasks."db:migrate"]
 description = "マイグレーション実行"
 run = "sqlx migrate run"
+
+[tasks.visual]
+description = "視覚回帰テスト (Playwright)"
+dir = "tests/visual"
+run = "npx playwright test"
