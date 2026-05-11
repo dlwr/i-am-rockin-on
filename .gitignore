@@ -8,3 +8,6 @@
 *.db-journal
 .DS_Store
 /.superpowers
+node_modules
+tests/visual/test-results
+tests/visual/playwright-report

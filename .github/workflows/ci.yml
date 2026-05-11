@@ -62,3 +62,36 @@ jobs:
         env:
           SQLX_OFFLINE: "true"
         run: cargo leptos build
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: tests/visual/package-lock.json
+
+      - name: Install Playwright deps
+        working-directory: tests/visual
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        id: cache-playwright
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/visual/package-lock.json') }}
+
+      - name: Install Playwright browser
+        if: steps.cache-playwright.outputs.cache-hit != 'true'
+        working-directory: tests/visual
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system deps when cache hit
+        if: steps.cache-playwright.outputs.cache-hit == 'true'
+        working-directory: tests/visual
+        run: npx playwright install-deps chromium
+
+      - name: Run visual regression tests
+        working-directory: tests/visual
+        env:
+          SQLX_OFFLINE: "true"
+        run: npx playwright test

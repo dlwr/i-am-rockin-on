@@ -66,28 +66,35 @@ async fn main() -> anyhow::Result<()> {
         throttle_ms: cfg.scrape_throttle_ms,
     });
 
-    {
-        let p = rokinon_pipeline.clone();
-        let l = log.clone();
-        tokio::spawn(async move {
-            if let Err(e) = run_initial_scrape_if_empty(p, l, "rokinon").await {
-                tracing::error!(error = %e, "initial rokinon scrape failed");
-            }
-        });
-    }
-    {
-        let p = pitchfork_pipeline.clone();
-        let l = log.clone();
-        tokio::spawn(async move {
-            if let Err(e) = run_initial_scrape_if_empty(p, l, "pitchfork").await {
-                tracing::error!(error = %e, "initial pitchfork scrape failed");
-            }
-        });
+    // Visual regression tests set DISABLE_SCRAPE=1 to keep the DB pristine —
+    // we want full control over the row set without the scheduler racing in.
+    let scrape_disabled = std::env::var("DISABLE_SCRAPE").ok().as_deref() == Some("1");
+    if !scrape_disabled {
+        {
+            let p = rokinon_pipeline.clone();
+            let l = log.clone();
+            tokio::spawn(async move {
+                if let Err(e) = run_initial_scrape_if_empty(p, l, "rokinon").await {
+                    tracing::error!(error = %e, "initial rokinon scrape failed");
+                }
+            });
+        }
+        {
+            let p = pitchfork_pipeline.clone();
+            let l = log.clone();
+            tokio::spawn(async move {
+                if let Err(e) = run_initial_scrape_if_empty(p, l, "pitchfork").await {
+                    tracing::error!(error = %e, "initial pitchfork scrape failed");
+                }
+            });
+        }
     }
 
     let scheduler = new_scheduler().await?;
-    add_scrape_job(&scheduler, rokinon_pipeline.clone(), "0 0 19 * * *").await?;
-    add_scrape_job(&scheduler, pitchfork_pipeline.clone(), "0 0 7 * * *").await?;
+    if !scrape_disabled {
+        add_scrape_job(&scheduler, rokinon_pipeline.clone(), "0 0 19 * * *").await?;
+        add_scrape_job(&scheduler, pitchfork_pipeline.clone(), "0 0 7 * * *").await?;
+    }
     let _sched = scheduler;
 
     let conf = get_configuration(None).unwrap();

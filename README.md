@@ -27,8 +27,12 @@ mise run dev
 mise run scrape
 # 別ソース指定: cargo run --features ssr --bin scrape -- --source pitchfork
 
-# テスト
+# テスト (Rust)
 mise run test
+
+# 視覚回帰テスト (Playwright、 home の grid layout を 3 viewport で検証)
+(cd tests/visual && npm ci && npx playwright install chromium)
+mise run visual
 ```
 
 ## ソース
@@ -50,6 +54,7 @@ mise run test
 | `PITCHFORK_RECENCY_DAYS` | no | `90` | Pitchfork 取り込みの直近日数 |
 | `PITCHFORK_MAX_PAGES` | no | `3` | Pitchfork index ページネーション上限 |
 | `SCRAPE_THROTTLE_MS` | no | `800` | 候補処理の合間に挟む sleep。 `0` で skip |
+| `DISABLE_SCRAPE` | no | — | `1` で initial scrape と定期スケジューラを抑止。 視覚回帰テスト向けの knob |
 
 ## ヘルスチェック
 
