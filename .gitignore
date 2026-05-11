@@ -2,6 +2,7 @@
 /dist
 /.env
 /data
+/.cargo
 *.db
 *.db-shm
 *.db-wal
