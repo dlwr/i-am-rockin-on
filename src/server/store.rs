@@ -560,4 +560,39 @@ mod tests {
         assert!(repo.pick_recent_addition(since).await.unwrap().is_none(),
             "group の MIN で判定するため、 新しい sibling があっても拾われない");
     }
+
+    #[tokio::test]
+    async fn pick_recent_addition_coalesces_optional_fields_across_sources_in_same_group() {
+        use chrono::{Duration, Utc};
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool.clone());
+        let url = "https://open.spotify.com/album/coalesced";
+
+        // 古い row (featured_at が古い) が youtube_url を持ち、 新しい row は None
+        let mut older = sample_with(
+            "rokinon", "r1", "Foo", Some("Bar"),
+            Some(url),
+            NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+        );
+        older.youtube_url = Some("https://youtu.be/old".into());
+        let (older_row, _) = repo.upsert(older).await.unwrap();
+        set_created_at(&pool, older_row.id, Utc::now() - Duration::days(20)).await;
+
+        let mut newer = sample_with(
+            "pitchfork", "p1", "Foo", Some("Bar"),
+            Some(url),
+            NaiveDate::from_ymd_opt(2026, 5, 8).unwrap(),
+        );
+        newer.youtube_url = None;
+        let (newer_row, _) = repo.upsert(newer).await.unwrap();
+        set_created_at(&pool, newer_row.id, Utc::now() - Duration::days(5)).await;
+
+        let since = Utc::now() - Duration::days(30);
+        let card = repo.pick_recent_addition(since).await.unwrap().unwrap();
+
+        // head は featured_at の新しい方 (pitchfork = newer) なのでアーティスト名はそこから
+        assert_eq!(card.artist_name, "Foo");
+        // youtube_url は head が None でも、 sibling から coalesce される
+        assert_eq!(card.youtube_url.as_deref(), Some("https://youtu.be/old"));
+    }
 }
