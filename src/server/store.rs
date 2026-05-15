@@ -532,4 +532,32 @@ mod tests {
         let since = Utc::now() - Duration::days(30);
         assert!(repo.pick_recent_addition(since).await.unwrap().is_none());
     }
+
+    #[tokio::test]
+    async fn pick_recent_addition_excludes_dedup_group_when_oldest_row_is_outside_window() {
+        use chrono::{Duration, Utc};
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool.clone());
+        let url = "https://open.spotify.com/album/shared";
+
+        // 同 dedup_key (同じ spotify_url) の 2 行。 古い方が window 外、 新しい方が window 内
+        let (old_row, _) = repo.upsert(sample_with(
+            "rokinon", "old", "Foo", Some("Bar"),
+            Some(url),
+            NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+        )).await.unwrap();
+        set_created_at(&pool, old_row.id, Utc::now() - Duration::days(100)).await;
+
+        let (new_row, _) = repo.upsert(sample_with(
+            "pitchfork", "new", "Foo", Some("Bar"),
+            Some(url),
+            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+        )).await.unwrap();
+        set_created_at(&pool, new_row.id, Utc::now() - Duration::days(5)).await;
+
+        let since = Utc::now() - Duration::days(30);
+        // group の MIN(created_at) = -100 日 で window 外 → 除外
+        assert!(repo.pick_recent_addition(since).await.unwrap().is_none(),
+            "group の MIN で判定するため、 新しい sibling があっても拾われない");
+    }
 }
