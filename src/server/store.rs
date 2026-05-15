@@ -107,6 +107,78 @@ impl RecommendationRepo {
         Ok((saved, was_inserted))
     }
 
+    pub async fn pick_recent_addition(
+        &self,
+        since: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<Option<crate::domain::selector_card::SelectorCard>> {
+        use crate::domain::selector_card::SelectorCard;
+        use crate::server::error::AppError;
+
+        #[derive(serde::Deserialize)]
+        struct RawRow {
+            source_id: String,
+            artist_name: String,
+            album_name: Option<String>,
+            spotify_url: Option<String>,
+            spotify_image_url: Option<String>,
+            youtube_url: Option<String>,
+            featured_at: chrono::NaiveDate,
+        }
+
+        let row = sqlx::query!(
+            r#"WITH keyed AS (
+                SELECT
+                    COALESCE(
+                        spotify_url,
+                        lower(trim(artist_name)) || '|' || lower(trim(coalesce(album_name, '')))
+                    ) AS dedup_key,
+                    source_id,
+                    artist_name,
+                    album_name,
+                    spotify_url,
+                    spotify_image_url,
+                    youtube_url,
+                    featured_at,
+                    created_at
+                FROM recommendations
+            )
+            SELECT
+                dedup_key AS "dedup_key!: String",
+                MIN(created_at) AS "added_at!: chrono::DateTime<chrono::Utc>",
+                json_group_array(json_object(
+                    'source_id', source_id,
+                    'artist_name', artist_name,
+                    'album_name', album_name,
+                    'spotify_url', spotify_url,
+                    'spotify_image_url', spotify_image_url,
+                    'youtube_url', youtube_url,
+                    'featured_at', featured_at
+                )) AS "rows_json!: String"
+            FROM keyed
+            GROUP BY dedup_key
+            HAVING MIN(created_at) >= ?
+            ORDER BY RANDOM()
+            LIMIT 1"#,
+            since,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else { return Ok(None); };
+        let mut raw: Vec<RawRow> = serde_json::from_str(&row.rows_json)
+            .map_err(|e| AppError::Parse(format!("rows_json: {e}")))?;
+        raw.sort_by(|a, b| b.featured_at.cmp(&a.featured_at).then_with(|| a.source_id.cmp(&b.source_id)));
+        let head = raw.first().ok_or_else(|| AppError::Parse("empty group".into()))?;
+        Ok(Some(SelectorCard {
+            artist_name: head.artist_name.clone(),
+            album_name: raw.iter().find_map(|r| r.album_name.clone()),
+            spotify_url: raw.iter().find_map(|r| r.spotify_url.clone()),
+            spotify_image_url: raw.iter().find_map(|r| r.spotify_image_url.clone()),
+            youtube_url: raw.iter().find_map(|r| r.youtube_url.clone()),
+            added_at: row.added_at,
+        }))
+    }
+
     pub async fn list_recent_albums(&self, limit: i64) -> AppResult<Vec<crate::domain::album_card::AlbumCard>> {
         use crate::domain::album_card::{AlbumCard, SourceLink};
         use crate::server::error::AppError;
@@ -415,5 +487,32 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
             NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
         ]);
+    }
+
+    async fn set_created_at(pool: &SqlitePool, id: i64, created_at: chrono::DateTime<chrono::Utc>) {
+        sqlx::query("UPDATE recommendations SET created_at = ? WHERE id = ?")
+            .bind(created_at)
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn pick_recent_addition_returns_single_in_window_row() {
+        use chrono::{Duration, Utc};
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool.clone());
+        let (saved, _) = repo.upsert(sample_with(
+            "rokinon", "a", "Aldous Harding", Some("Train on the Island"),
+            Some("https://open.spotify.com/album/A"),
+            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+        )).await.unwrap();
+        set_created_at(&pool, saved.id, Utc::now() - Duration::days(5)).await;
+
+        let since = Utc::now() - Duration::days(30);
+        let card = repo.pick_recent_addition(since).await.unwrap().unwrap();
+        assert_eq!(card.artist_name, "Aldous Harding");
+        assert_eq!(card.album_name.as_deref(), Some("Train on the Island"));
     }
 }
