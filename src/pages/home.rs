@@ -52,6 +52,26 @@ mod tests {
     fn source_label_unknown_id_passthrough() {
         assert_eq!(source_label("nme"), "nme");
     }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn selector_card_view_from_domain_formats_added_at_as_yyyy_mm_dd() {
+        use chrono::{TimeZone, Utc};
+        use crate::domain::selector_card::SelectorCard;
+
+        let card = SelectorCard {
+            artist_name: "Aldous Harding".into(),
+            album_name: Some("Train on the Island".into()),
+            spotify_url: Some("https://open.spotify.com/album/abc".into()),
+            spotify_image_url: None,
+            youtube_url: None,
+            added_at: Utc.with_ymd_and_hms(2026, 5, 10, 12, 0, 0).unwrap(),
+        };
+        let view = SelectorCardView::from(card);
+        assert_eq!(view.artist_name, "Aldous Harding");
+        assert_eq!(view.album_name.as_deref(), Some("Train on the Island"));
+        assert_eq!(view.added_at, "2026-05-10");
+    }
 }
 
 #[server(ListAlbums, "/api")]
@@ -102,6 +122,30 @@ impl From<crate::domain::album_card::AlbumCard> for AlbumCardView {
                     source_url: s.source_url,
                 })
                 .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SelectorCardView {
+    pub artist_name: String,
+    pub album_name: Option<String>,
+    pub spotify_url: Option<String>,
+    pub spotify_image_url: Option<String>,
+    pub youtube_url: Option<String>,
+    pub added_at: String, // YYYY-MM-DD
+}
+
+#[cfg(feature = "ssr")]
+impl From<crate::domain::selector_card::SelectorCard> for SelectorCardView {
+    fn from(c: crate::domain::selector_card::SelectorCard) -> Self {
+        Self {
+            artist_name: c.artist_name,
+            album_name: c.album_name,
+            spotify_url: c.spotify_url,
+            spotify_image_url: c.spotify_image_url,
+            youtube_url: c.youtube_url,
+            added_at: c.added_at.format("%Y-%m-%d").to_string(),
         }
     }
 }
