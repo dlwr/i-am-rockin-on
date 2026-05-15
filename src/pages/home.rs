@@ -87,6 +87,22 @@ pub async fn list_albums() -> Result<Vec<AlbumCardView>, ServerFnError> {
     Ok(cards.into_iter().map(AlbumCardView::from).collect())
 }
 
+#[server(Selector, "/api")]
+pub async fn selector() -> Result<Option<SelectorCardView>, ServerFnError> {
+    use crate::server::store::RecommendationRepo;
+    use chrono::{Duration, Utc};
+    use std::sync::Arc;
+
+    let repo = use_context::<Arc<RecommendationRepo>>()
+        .ok_or_else(|| ServerFnError::new("repo missing"))?;
+    let since = Utc::now() - Duration::days(30);
+    let picked = repo
+        .pick_recent_addition(since)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(picked.map(SelectorCardView::from))
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AlbumCardView {
     pub artist_name: String,
