@@ -515,4 +515,21 @@ mod tests {
         assert_eq!(card.artist_name, "Aldous Harding");
         assert_eq!(card.album_name.as_deref(), Some("Train on the Island"));
     }
+
+    #[tokio::test]
+    async fn pick_recent_addition_excludes_rows_older_than_window() {
+        use chrono::{Duration, Utc};
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool.clone());
+        let (saved, _) = repo.upsert(sample_with(
+            "rokinon", "a", "Aldous Harding", Some("Train on the Island"),
+            Some("https://open.spotify.com/album/A"),
+            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+        )).await.unwrap();
+        // window 外 (100 日前) に置く
+        set_created_at(&pool, saved.id, Utc::now() - Duration::days(100)).await;
+
+        let since = Utc::now() - Duration::days(30);
+        assert!(repo.pick_recent_addition(since).await.unwrap().is_none());
+    }
 }
