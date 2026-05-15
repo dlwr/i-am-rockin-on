@@ -169,12 +169,21 @@ impl From<crate::domain::selector_card::SelectorCard> for SelectorCardView {
 #[component]
 pub fn Home() -> impl IntoView {
     let cards = Resource::new(|| (), |_| async { list_albums().await });
+    let selector_action = Action::new(|_: &()| async { selector().await });
+
     view! {
-        <header class="border-b-4 border-double border-ink pb-2 mb-6">
+        <header class="flex items-baseline justify-between border-b-4 border-double border-ink pb-2 mb-6">
             <h1 class="font-zine italic font-bold text-3xl text-ink m-0">
                 "i am rockin on"
             </h1>
+            <button
+                class="font-zine font-bold text-sm px-3 py-1.5 bg-ink text-paper border border-ink cursor-pointer hover:bg-paper hover:text-ink"
+                on:click=move |_| { selector_action.dispatch(()); }
+            >
+                "Selector"
+            </button>
         </header>
+        <SelectorSlot action=selector_action/>
         <Suspense fallback=|| view! { <p class="text-sepia">"loading..."</p> }>
             {move || cards.get().map(|r| match r {
                 Ok(items) => view! { <AlbumGrid items=items/> }.into_any(),
@@ -183,6 +192,101 @@ pub fn Home() -> impl IntoView {
                 }.into_any(),
             })}
         </Suspense>
+    }
+}
+
+#[component]
+fn SelectorSlot(action: Action<(), Result<Option<SelectorCardView>, ServerFnError>>) -> impl IntoView {
+    let pending = action.pending();
+    let value = action.value();
+
+    view! {
+        {move || {
+            if pending.get() {
+                view! {
+                    <section class="my-6">
+                        <p class="font-zine italic text-sepia">"選んどるよ…"</p>
+                    </section>
+                }.into_any()
+            } else {
+                match value.get() {
+                    None => ().into_any(),
+                    Some(Ok(None)) => view! {
+                        <section class="my-6">
+                            <p class="font-zine italic text-sepia">
+                                "直近1ヶ月で追加された一枚はまだないずら"
+                            </p>
+                        </section>
+                    }.into_any(),
+                    Some(Ok(Some(card))) => view! {
+                        <section class="my-6">
+                            <SelectorCard card=card.clone()/>
+                            <button
+                                class="mt-3 font-zine text-xs px-2.5 py-1 border border-ink text-ink cursor-pointer hover:bg-ink hover:text-paper"
+                                on:click=move |_| { action.dispatch(()); }
+                            >
+                                "もう一度"
+                            </button>
+                        </section>
+                    }.into_any(),
+                    Some(Err(e)) => view! {
+                        <p class="text-err">{format!("error: {e}")}</p>
+                    }.into_any(),
+                }
+            }
+        }}
+    }
+}
+
+#[component]
+fn SelectorCard(card: SelectorCardView) -> impl IntoView {
+    let alt = image_alt(&card.artist_name, card.album_name.as_deref());
+    view! {
+        <article class="bg-card shadow-zine p-4 max-w-md flex flex-col gap-3">
+            {match card.spotify_image_url.as_ref() {
+                Some(src) => view! {
+                    <img
+                        class="w-full aspect-square object-cover bg-paper"
+                        src=src.clone()
+                        alt=alt
+                        loading="lazy"
+                    />
+                }.into_any(),
+                None => view! {
+                    <div
+                        class="w-full aspect-square bg-placeholder flex items-center justify-center text-sepia text-6xl font-zine"
+                        aria-hidden="true"
+                    >"♪"</div>
+                }.into_any(),
+            }}
+            <div class="flex flex-col gap-1">
+                <div class="font-zine font-bold text-lg text-ink leading-tight">
+                    {card.artist_name.clone()}
+                </div>
+                {card.album_name.clone().map(|a| view! {
+                    <div class="font-zine italic text-base text-sepia leading-tight">{a}</div>
+                })}
+            </div>
+            <div class="flex flex-wrap gap-2 items-center">
+                {card.spotify_url.clone().map(|u| view! {
+                    <a
+                        class="text-xs font-semibold px-2.5 py-1 rounded-full bg-spotify text-white no-underline"
+                        href=u
+                        target="_blank"
+                        rel="noopener"
+                    >"Spotify"</a>
+                })}
+                {card.youtube_url.clone().map(|u| view! {
+                    <a
+                        class="text-xs font-semibold px-2.5 py-1 rounded-full bg-youtube text-white no-underline"
+                        href=u
+                        target="_blank"
+                        rel="noopener"
+                    >"YouTube"</a>
+                })}
+                <span class="ml-auto text-[0.7rem] text-sepia">{card.added_at.clone()}</span>
+            </div>
+        </article>
     }
 }
 
