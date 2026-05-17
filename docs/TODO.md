@@ -10,6 +10,8 @@ CI 側で sqlx-cli cache が `sqlx` だけ保存して `cargo-sqlx` が抜けて
 
 追加で 2026-05-17 に Selector pick カードへ「記事」ボタンを追加 (PR #32)。 AlbumCard 側にあった `SourceLink` を SelectorCard に共用し、 `pick_recent_addition` も SQL の json_object に source_url を載せて dedup group 全ソースを返すよう拡張。 SelectorPick で AlbumGrid と同じ SourceMenu を Spotify/YouTube の隣に並べた。 sqlx offline metadata の再生成漏れで CI 1 回 fail。
 
+同日 2026-05-17 に mobile (375px 想定) で SourceMenu の dropdown が (a) 画面外にはみ出る (b) sibling card の下に潜る、 の 2 問題を修正 (PR #34)。 root cause は (a) `<details>` 基準の `right-0` anchor で flex-wrap 折り返し時に viewport を越える、 (b) `.tilt-cycle` の transform で各 card が独自 stacking context を作るので dropdown の `z-10` が DOM 順で負ける、 の 2 つ。 修正は card に `relative` を付けて dropdown の containing block を card に揃え、 `has-[details[open]]:z-20` で開いている card の stacking を持ち上げ、 mobile の `min-w` を 8rem に下げて 320px 幅も担保。 Playwright で Aldous を multi-source + youtube_url にする seed と `boundingBox` / `elementsFromPoint` 検証を追加 (red→green 確認済み)。
+
 ### 低優先度
 
 - [ ] **ローカル macOS で `cargo leptos build` が失敗**
