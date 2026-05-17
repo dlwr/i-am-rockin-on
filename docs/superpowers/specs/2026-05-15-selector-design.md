@@ -149,11 +149,11 @@ pub struct SelectorCardView {
 
 ### 視覚回帰
 
-`tests/visual/` の home スナップショットは 3 viewport で grid を撮影している:
+`tests/visual/home.spec.ts` は pixel-diff スナップショットを使わず、 `ul.tilt-cycle` の `grid-template-columns` トークン数 / 要素 count / `aspect-ratio` 等の computed style assertion のみ:
 
-- `SelectorSlot` を Action idle 時に DOM 不在にして、 grid 部分のスナップショットは無変更を維持
-- ヘッダ部の expected スナップショットは Selector ボタン分の差分が出る → 実装 PR で `npx playwright test --update-snapshots` を 1 コミットに分離
-- 「Selector ボタン押下後」 の状態は新規スナップショットを 1 枚追加する判断はせず、 v1 では grid との分離だけ確認できれば十分
+- `SelectorSlot` を Action idle 時に DOM 不在にすれば grid 兄弟要素が増えず、 既存 4 テストは未更新で通る
+- ヘッダ部 (h1 + Selector ボタン) は test の対象外。 expected の更新は不要
+- 「Selector ボタン押下後」 の状態の新規テストは v1 では追加しない (実機で十分)
 
 ## YAGNI で削るもの
 
