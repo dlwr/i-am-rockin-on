@@ -26,12 +26,20 @@ jobs:
         id: cache-sqlx
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/bin/sqlx
-          key: bin-sqlx-${{ runner.os }}-v0.8
+          # cargo subcommand 解決には `cargo-sqlx` 本体が必須。 旧 cache は `sqlx`
+          # だけ保存していて restore 後に `cargo sqlx` が落ちる事象あり、 両方含める。
+          path: |
+            ~/.cargo/bin/sqlx
+            ~/.cargo/bin/cargo-sqlx
+          key: bin-sqlx-${{ runner.os }}-v0.8-2
 
       - name: Install sqlx-cli
-        if: steps.cache-sqlx.outputs.cache-hit != 'true'
-        run: cargo install sqlx-cli --version "^0.8" --no-default-features --features rustls,sqlite --locked
+        # cache-hit を信用すると binary が消えてた時に install を skip してしまうので
+        # ファイル実在を直接確認する。 cargo-sqlx が無いと `cargo sqlx` が落ちる。
+        run: |
+          if [ ! -x "$HOME/.cargo/bin/cargo-sqlx" ] || [ ! -x "$HOME/.cargo/bin/sqlx" ]; then
+            cargo install sqlx-cli --version "^0.8" --no-default-features --features rustls,sqlite --locked
+          fi
 
       - name: Cache cargo-leptos binary
         id: cache-leptos
@@ -41,8 +49,12 @@ jobs:
           key: bin-leptos-${{ runner.os }}-v${{ env.CARGO_LEPTOS_VERSION }}
 
       - name: Install cargo-leptos
-        if: steps.cache-leptos.outputs.cache-hit != 'true'
-        run: curl -fsSL "https://github.com/leptos-rs/cargo-leptos/releases/download/v${CARGO_LEPTOS_VERSION}/cargo-leptos-installer.sh" | bash
+        # cache-hit を信用すると binary が消えてた時に install を skip してしまうので
+        # ファイル実在を直接確認する。
+        run: |
+          if [ ! -x "$HOME/.cargo/bin/cargo-leptos" ]; then
+            curl -fsSL "https://github.com/leptos-rs/cargo-leptos/releases/download/v${CARGO_LEPTOS_VERSION}/cargo-leptos-installer.sh" | bash
+          fi
 
       - name: Prepare SQLite database
         run: |
