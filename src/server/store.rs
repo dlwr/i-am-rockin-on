@@ -125,6 +125,9 @@ impl RecommendationRepo {
             featured_at: chrono::NaiveDate,
         }
 
+        // 注意: `keyed` CTE の dedup_key 正規化は `list_recent_albums` と同一。
+        // sqlx::query! マクロのため CTE 自体は共有化できないが、 仕様変更時は
+        // 両方を同時に更新する。
         let row = sqlx::query!(
             r#"WITH keyed AS (
                 SELECT
@@ -195,6 +198,9 @@ impl RecommendationRepo {
             featured_at: chrono::NaiveDate,
         }
 
+        // 注意: `keyed` CTE の dedup_key 正規化は `pick_recent_addition` と同一。
+        // sqlx::query! マクロのため CTE 自体は共有化できないが、 仕様変更時は
+        // 両方を同時に更新する。
         let rows = sqlx::query!(
             r#"WITH keyed AS (
                 SELECT
