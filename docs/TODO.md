@@ -8,6 +8,8 @@
 
 CI 側で sqlx-cli cache が `sqlx` だけ保存して `cargo-sqlx` が抜けてた事故も並行で修正 (PR #30 内に同居)。 旧 cache 失効まで一回 cargo install が走る。
 
+追加で 2026-05-17 に Selector pick カードへ「記事」ボタンを追加 (PR #32)。 AlbumCard 側にあった `SourceLink` を SelectorCard に共用し、 `pick_recent_addition` も SQL の json_object に source_url を載せて dedup group 全ソースを返すよう拡張。 SelectorPick で AlbumGrid と同じ SourceMenu を Spotify/YouTube の隣に並べた。 sqlx offline metadata の再生成漏れで CI 1 回 fail。
+
 ### 低優先度
 
 - [ ] **ローカル macOS で `cargo leptos build` が失敗**
