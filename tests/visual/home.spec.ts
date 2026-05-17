@@ -46,4 +46,13 @@ test.describe("home page visual regression (pre-seeded)", () => {
     await expect(placeholder).toBeVisible();
     await expect(placeholder).toHaveCSS("aspect-ratio", "1 / 1");
   });
+
+  test("Selector pick card shows 記事 link", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Selector" }).click();
+    const pick = page.locator("article.bg-card.shadow-zine.p-4");
+    await expect(pick).toBeVisible();
+    await expect(pick.getByRole("link", { name: "記事" })).toBeVisible();
+  });
 });

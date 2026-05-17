@@ -66,11 +66,46 @@ mod tests {
             spotify_image_url: None,
             youtube_url: None,
             added_at: Utc.with_ymd_and_hms(2026, 5, 10, 12, 0, 0).unwrap(),
+            sources: vec![],
         };
         let view = SelectorCardView::from(card);
         assert_eq!(view.artist_name, "Aldous Harding");
         assert_eq!(view.album_name.as_deref(), Some("Train on the Island"));
         assert_eq!(view.added_at, "2026-05-10");
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn selector_card_view_from_domain_carries_sources() {
+        use chrono::{NaiveDate, TimeZone, Utc};
+        use crate::domain::album_card::SourceLink;
+        use crate::domain::selector_card::SelectorCard;
+
+        let card = SelectorCard {
+            artist_name: "Foo".into(),
+            album_name: Some("Bar".into()),
+            spotify_url: None,
+            spotify_image_url: None,
+            youtube_url: None,
+            added_at: Utc.with_ymd_and_hms(2026, 5, 10, 12, 0, 0).unwrap(),
+            sources: vec![
+                SourceLink {
+                    source_id: "pitchfork".into(),
+                    source_url: "https://pitchfork.com/x".into(),
+                    featured_at: NaiveDate::from_ymd_opt(2026, 5, 8).unwrap(),
+                },
+                SourceLink {
+                    source_id: "rokinon".into(),
+                    source_url: "https://ameblo.jp/y".into(),
+                    featured_at: NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+                },
+            ],
+        };
+        let view = SelectorCardView::from(card);
+        assert_eq!(view.sources.len(), 2);
+        assert_eq!(view.sources[0].source_id, "pitchfork");
+        assert_eq!(view.sources[0].source_url, "https://pitchfork.com/x");
+        assert_eq!(view.sources[1].source_id, "rokinon");
     }
 }
 
@@ -150,6 +185,7 @@ pub struct SelectorCardView {
     pub spotify_image_url: Option<String>,
     pub youtube_url: Option<String>,
     pub added_at: String, // YYYY-MM-DD
+    pub sources: Vec<SourceLinkView>,
 }
 
 #[cfg(feature = "ssr")]
@@ -162,6 +198,14 @@ impl From<crate::domain::selector_card::SelectorCard> for SelectorCardView {
             spotify_image_url: c.spotify_image_url,
             youtube_url: c.youtube_url,
             added_at: c.added_at.format("%Y-%m-%d").to_string(),
+            sources: c
+                .sources
+                .into_iter()
+                .map(|s| SourceLinkView {
+                    source_id: s.source_id,
+                    source_url: s.source_url,
+                })
+                .collect(),
         }
     }
 }
@@ -287,6 +331,7 @@ fn SelectorPick(card: SelectorCardView) -> impl IntoView {
                         rel="noopener"
                     >"YouTube"</a>
                 })}
+                <SourceMenu sources=card.sources.clone()/>
                 <span class="ml-auto text-[0.7rem] text-sepia">{card.added_at.clone()}</span>
             </div>
         </article>
