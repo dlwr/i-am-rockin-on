@@ -222,7 +222,7 @@ fn SelectorSlot(action: Action<(), Result<Option<SelectorCardView>, ServerFnErro
                     }.into_any(),
                     Some(Ok(Some(card))) => view! {
                         <section class="my-6">
-                            <SelectorCard card=card.clone()/>
+                            <SelectorPick card=card.clone()/>
                             <button
                                 class="mt-3 font-zine text-xs px-2.5 py-1 border border-ink text-ink cursor-pointer hover:bg-ink hover:text-paper disabled:opacity-50 disabled:cursor-not-allowed"
                                 disabled=move || pending.get()
@@ -242,7 +242,7 @@ fn SelectorSlot(action: Action<(), Result<Option<SelectorCardView>, ServerFnErro
 }
 
 #[component]
-fn SelectorCard(card: SelectorCardView) -> impl IntoView {
+fn SelectorPick(card: SelectorCardView) -> impl IntoView {
     let alt = image_alt(&card.artist_name, card.album_name.as_deref());
     view! {
         <article class="bg-card shadow-zine p-4 max-w-md flex flex-col gap-3">
