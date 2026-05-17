@@ -26,14 +26,18 @@ jobs:
         id: cache-sqlx
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/bin/sqlx
-          key: bin-sqlx-${{ runner.os }}-v0.8
+          # cargo subcommand 解決には `cargo-sqlx` 本体が必須。 旧 cache は `sqlx`
+          # だけ保存していて restore 後に `cargo sqlx` が落ちる事象あり、 両方含める。
+          path: |
+            ~/.cargo/bin/sqlx
+            ~/.cargo/bin/cargo-sqlx
+          key: bin-sqlx-${{ runner.os }}-v0.8-2
 
       - name: Install sqlx-cli
         # cache-hit を信用すると binary が消えてた時に install を skip してしまうので
-        # ファイル実在を直接確認する。
+        # ファイル実在を直接確認する。 cargo-sqlx が無いと `cargo sqlx` が落ちる。
         run: |
-          if [ ! -x "$HOME/.cargo/bin/sqlx" ]; then
+          if [ ! -x "$HOME/.cargo/bin/cargo-sqlx" ] || [ ! -x "$HOME/.cargo/bin/sqlx" ]; then
             cargo install sqlx-cli --version "^0.8" --no-default-features --features rustls,sqlite --locked
           fi
 
