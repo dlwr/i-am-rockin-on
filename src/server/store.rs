@@ -111,12 +111,14 @@ impl RecommendationRepo {
         &self,
         since: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<Option<crate::domain::selector_card::SelectorCard>> {
+        use crate::domain::album_card::SourceLink;
         use crate::domain::selector_card::SelectorCard;
         use crate::server::error::AppError;
 
         #[derive(serde::Deserialize)]
         struct RawRow {
             source_id: String,
+            source_url: String,
             artist_name: String,
             album_name: Option<String>,
             spotify_url: Option<String>,
@@ -136,6 +138,7 @@ impl RecommendationRepo {
                         lower(trim(artist_name)) || '|' || lower(trim(coalesce(album_name, '')))
                     ) AS dedup_key,
                     source_id,
+                    source_url,
                     artist_name,
                     album_name,
                     spotify_url,
@@ -150,6 +153,7 @@ impl RecommendationRepo {
                 MIN(created_at) AS "added_at!: chrono::DateTime<chrono::Utc>",
                 json_group_array(json_object(
                     'source_id', source_id,
+                    'source_url', source_url,
                     'artist_name', artist_name,
                     'album_name', album_name,
                     'spotify_url', spotify_url,
@@ -179,6 +183,11 @@ impl RecommendationRepo {
             spotify_image_url: raw.iter().find_map(|r| r.spotify_image_url.clone()),
             youtube_url: raw.iter().find_map(|r| r.youtube_url.clone()),
             added_at: row.added_at,
+            sources: raw.iter().map(|r| SourceLink {
+                source_id: r.source_id.clone(),
+                source_url: r.source_url.clone(),
+                featured_at: r.featured_at,
+            }).collect(),
         }))
     }
 
@@ -565,6 +574,35 @@ mod tests {
         // group の MIN(created_at) = -100 日 で window 外 → 除外
         assert!(repo.pick_recent_addition(since).await.unwrap().is_none(),
             "group の MIN で判定するため、 新しい sibling があっても拾われない");
+    }
+
+    #[tokio::test]
+    async fn pick_recent_addition_returns_sources_ordered_by_featured_at_desc() {
+        use chrono::{Duration, Utc};
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool.clone());
+        let url = "https://open.spotify.com/album/with-sources";
+
+        let (older, _) = repo.upsert(sample_with(
+            "rokinon", "r1", "Foo", Some("Bar"),
+            Some(url), NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+        )).await.unwrap();
+        set_created_at(&pool, older.id, Utc::now() - Duration::days(20)).await;
+
+        let (newer, _) = repo.upsert(sample_with(
+            "pitchfork", "p1", "Foo", Some("Bar"),
+            Some(url), NaiveDate::from_ymd_opt(2026, 5, 8).unwrap(),
+        )).await.unwrap();
+        set_created_at(&pool, newer.id, Utc::now() - Duration::days(5)).await;
+
+        let since = Utc::now() - Duration::days(30);
+        let card = repo.pick_recent_addition(since).await.unwrap().unwrap();
+
+        assert_eq!(card.sources.len(), 2, "merge した dedup group のソース全部を載せる");
+        assert_eq!(card.sources[0].source_id, "pitchfork", "featured_at の新しい順");
+        assert_eq!(card.sources[0].source_url, "https://example.com/pitchfork/p1");
+        assert_eq!(card.sources[1].source_id, "rokinon");
+        assert_eq!(card.sources[1].source_url, "https://example.com/rokinon/r1");
     }
 
     #[tokio::test]
