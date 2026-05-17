@@ -170,6 +170,7 @@ impl From<crate::domain::selector_card::SelectorCard> for SelectorCardView {
 pub fn Home() -> impl IntoView {
     let cards = Resource::new(|| (), |_| async { list_albums().await });
     let selector_action = Action::new(|_: &()| async { selector().await });
+    let selector_pending = selector_action.pending();
 
     view! {
         <header class="flex items-baseline justify-between border-b-4 border-double border-ink pb-2 mb-6">
@@ -177,7 +178,8 @@ pub fn Home() -> impl IntoView {
                 "i am rockin on"
             </h1>
             <button
-                class="font-zine font-bold text-sm px-3 py-1.5 bg-ink text-paper border border-ink cursor-pointer hover:bg-paper hover:text-ink"
+                class="font-zine font-bold text-sm px-3 py-1.5 bg-ink text-paper border border-ink cursor-pointer hover:bg-paper hover:text-ink disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled=move || selector_pending.get()
                 on:click=move |_| { selector_action.dispatch(()); }
             >
                 "Selector"
@@ -222,7 +224,8 @@ fn SelectorSlot(action: Action<(), Result<Option<SelectorCardView>, ServerFnErro
                         <section class="my-6">
                             <SelectorCard card=card.clone()/>
                             <button
-                                class="mt-3 font-zine text-xs px-2.5 py-1 border border-ink text-ink cursor-pointer hover:bg-ink hover:text-paper"
+                                class="mt-3 font-zine text-xs px-2.5 py-1 border border-ink text-ink cursor-pointer hover:bg-ink hover:text-paper disabled:opacity-50 disabled:cursor-not-allowed"
+                                disabled=move || pending.get()
                                 on:click=move |_| { action.dispatch(()); }
                             >
                                 "もう一度"
