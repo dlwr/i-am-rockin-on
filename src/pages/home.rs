@@ -289,7 +289,7 @@ fn SelectorSlot(action: Action<(), Result<Option<SelectorCardView>, ServerFnErro
 fn SelectorPick(card: SelectorCardView) -> impl IntoView {
     let alt = image_alt(&card.artist_name, card.album_name.as_deref());
     view! {
-        <article class="bg-card shadow-zine p-4 max-w-md flex flex-col gap-3">
+        <article class="bg-card shadow-zine p-4 max-w-md flex flex-col gap-3 relative">
             {match card.spotify_image_url.as_ref() {
                 Some(src) => view! {
                     <img
@@ -351,7 +351,7 @@ fn AlbumGrid(items: Vec<AlbumCardView>) -> impl IntoView {
     view! {
         <ul class="tilt-cycle list-none p-0 m-0 grid grid-cols-2 tab:grid-cols-3 pc:grid-cols-4 gap-5">
             {items.into_iter().map(|item| view! {
-                <li class="bg-card shadow-zine p-3 flex flex-col gap-2">
+                <li class="bg-card shadow-zine p-3 flex flex-col gap-2 relative has-[details[open]]:z-20">
                     {match item.spotify_image_url.as_ref() {
                         Some(src) => view! {
                             <img
@@ -421,13 +421,13 @@ fn SourceMenu(sources: Vec<SourceLinkView>) -> impl IntoView {
         }.into_any();
     }
     view! {
-        <details class="relative group">
+        <details class="group">
             <summary
                 class="text-xs font-semibold px-2.5 py-1 rounded-full border border-ink text-ink cursor-pointer list-none select-none group-hover:bg-ink group-hover:text-paper"
             >
                 "記事"
             </summary>
-            <ul class="absolute right-0 mt-1 z-10 bg-card border border-ink shadow-zine min-w-[10rem] list-none p-1 m-0">
+            <ul class="absolute right-0 mt-1 z-20 bg-card border border-ink shadow-zine min-w-[8rem] tab:min-w-[10rem] list-none p-1 m-0">
                 {sources.into_iter().map(|s| view! {
                     <li>
                         <a
