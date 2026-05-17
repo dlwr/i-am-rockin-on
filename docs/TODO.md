@@ -2,6 +2,31 @@
 
 このセッション（〜2026-05-09）でやり残したものの記録。最終 PR レビューで指摘された v1.5 4項目（per-article エラー許容 / fetch_and_extract 一貫化 / graceful shutdown / health endpoint）と Spotify URI / Bandcamp 正規化 / RSS 切替は実施済み。以下は未着手。
 
+## Selector セッション（2026-05-15〜2026-05-17）の引き継ぎ
+
+ホームに `Selector` ボタン (DJ メタファー = レゲエ・サウンドシステムの選盤者) を追加。 直近 30 日で dedup group 単位の `MIN(created_at)` が window 内のアルバムからランダム 1 枚を抜く `pick_recent_addition` を CTE + json_group_array で実装、 SelectorCard / SelectorCardView / `selector()` server fn / SelectorSlot+SelectorPick コンポーネントまで通して PR #30 で merge 済み。
+
+CI 側で sqlx-cli cache が `sqlx` だけ保存して `cargo-sqlx` が抜けてた事故も並行で修正 (PR #30 内に同居)。 旧 cache 失効まで一回 cargo install が走る。
+
+### 低優先度
+
+- [ ] **ローカル macOS で `cargo leptos build` が失敗**
+  - `mio 1.2.0` の wasm32 ターゲット不具合。 Cargo.lock 変更なしの状態で発生
+  - SSR バイナリは普通に動く (`cargo build --features ssr` OK)。 CI (Linux) も通る
+  - 場所: Cargo.lock の mio 行。 関連 issue: mio が wasm32 を将来サポートする方針かどうかチェック
+  - 対処候補: mio を patch で固定するか、 別の I/O ライブラリへ替える話。 hobby 規模で実害は dev 体験のみなので低優先
+
+- [ ] **Selector 「もう一度」 で同じアルバムが連続で出る可能性**
+  - v1 では許容と spec で明記。 履歴 (LocalStorage か Cookie) 入れる時に対処
+  - 体感で気になり始めたら検討
+
+### 気づき・注意点（実装ノート）
+
+- **`tests/visual/home.spec.ts` は pixel-diff スナップショットではない**。 grid-template-columns のトークン数と要素 count + aspect-ratio で layout を verify している。 UI 追加で header 部の DOM が増えても、 grid 兄弟要素が増えない限り既存テストはそのまま通る
+- **CTE 共有不可**: `pick_recent_addition` と `list_recent_albums` の `keyed` CTE は同じ dedup_key 正規化を持つが、 `sqlx::query!` マクロのため Rust 側で共有化できない。 双方にコメントを置いてある (同期注意)
+- **コンポーネント名と domain 型の衝突**: `SelectorCard` は domain 型 (`crate::domain::selector_card`) でも使うため、 Leptos コンポーネント側は `SelectorPick` に分離した。 似た構図が来たら最初から component 側を別名で切るのが正解
+- **CI cache の罠**: 「`cargo cmd` で使う subcommand binary は `cargo-cmd` だけど、 cache path に `cmd` だけ書いてた」 という事故。 cargo の subcommand resolution を意識した cache 設計が必要
+
 ## Pitchfork ＋ カードマージセッション（2026-05-10）の引き継ぎ
 
 Pitchfork ソース追加（スコア 8.0+ 直近 90 日）、 同一アルバムの Rokinon＋Pitchfork カードマージ、 Spotify 未配信アルバムの skip までデプロイ済み（PR #1, #2）。 以下は残り。
