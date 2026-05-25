@@ -130,6 +130,24 @@ cron (日次) → pipeline.run()
 
 CLAUDE.md ルール遵守: アソシエーションのテストは書かない。1 `it`（テスト関数）= 1 振る舞い。順序検証は3件以上。
 
+## 実装時の確定事項（実記事 `entry-12966301740.html` で検証）
+
+- **本文コンテナ**: `<div class="articleText _3NmYViIm" id="entryBody">`。ハッシュ化された `_3NmYViIm` ではなく安定した `#entryBody`（または `.articleText`）でスコープする。
+- **`推し` マーカーの位置**: `202605推し` は entryBody 内に1つ、外側（サイドバー/関連）にもう1つ存在。スコープしないと外側を誤検出し得るため `#entryBody` スコープは必須かつ正しい。
+- **記事タイトル**: 記事ページに RSS のような clean title が無い。`<meta property="og:title" content="『Hiding Places  の新作』">` から取得し、**全角括弧 `『』` を除去 + 空白正規化**してから `extract_artist_name` に渡す（除去しないと artist が `『Hiding Places` になる）。og:title は `<head>` 内なので entryBody スコープ外、ページ全体から取得する。
+- **アルバム名**: この記事は本文に `<h2>` が無く、`.ogpCard_title`（最初の1つ = "The Secret To Good Living"）から取得される。現行の h2 → ogpCard_title の優先順位で正しく拾える。
+- **YouTube**: 本文には `<a href="...youtube.com/playlist?list=...">` と `<iframe src="...youtube.com/embed/...">` の両方がある。`extract_youtube_url` を `a[href]` → `iframe[src]` の順で探すよう拡張する（現行は `a[href]` のみ。iframe のみの記事に対応するため）。この記事では a[href] のプレイリスト URL が返る。
+
+ゴールデンフィクスチャ `entry-12966301740.html` の期待値:
+- `detect_oshi`(entryBody text) → `2026-05-01`
+- album → `"The Secret To Good Living"`
+- youtube → `"https://www.youtube.com/playlist?list=OLAK5uy_n-3r7edlfatPi4p5z1KuG-wCI-0NP88ug"`
+- artist（og:title 正規化後）→ `"Hiding Places"`
+
+## sqlx オフラインキャッシュ
+
+このリポジトリは `.sqlx/` にオフラインクエリキャッシュを持ち、`query_as!` / `query!` マクロをコンパイル時検証する。新クエリ（`is_scraped` / `mark_scraped`）とマイグレーション追加後は、マイグレーション適用済み DB に対して `cargo sqlx prepare`（`DATABASE_URL=sqlite:data/app.db`）を実行してキャッシュを再生成する必要がある。
+
 ## 影響を受けるファイル
 
 - `migrations/` — `scraped_entries` 追加 + bootstrap（新規）
