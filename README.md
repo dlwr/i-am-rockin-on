@@ -50,6 +50,7 @@ mise run visual
 | `DATABASE_URL` | yes | — | SQLite 接続先 (例: `sqlite:data/app.db`) |
 | `SPOTIFY_CLIENT_ID` | yes | — | Spotify Web API |
 | `SPOTIFY_CLIENT_SECRET` | yes | — | Spotify Web API |
+| `ROKINON_MAX_PAGES` | no | `5` | rokinon が走査する entrylist のページ数 |
 | `PITCHFORK_SCORE_THRESHOLD` | no | `8.0` | Pitchfork 取り込みの下限スコア |
 | `PITCHFORK_RECENCY_DAYS` | no | `90` | Pitchfork 取り込みの直近日数 |
 | `PITCHFORK_MAX_PAGES` | no | `3` | Pitchfork index ページネーション上限 |
