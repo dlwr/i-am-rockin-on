@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
     sqlx::migrate!().run(&pool).await?;
 
     let source: Arc<dyn MediaSource> = match cli.source.as_str() {
-        "rokinon" => Arc::new(RokinonAdapter::new()),
+        "rokinon" => Arc::new(RokinonAdapter::new(cfg.rokinon_max_pages, cfg.scrape_throttle_ms)),
         "pitchfork" => Arc::new(PitchforkAdapter::new(
             cfg.pitchfork_score_threshold,
             cfg.pitchfork_recency_days,

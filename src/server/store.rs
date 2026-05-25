@@ -107,6 +107,34 @@ impl RecommendationRepo {
         Ok((saved, was_inserted))
     }
 
+    /// (source_id, external_id) が scraped_entries に存在するか。
+    pub async fn is_scraped(&self, source_id: &str, external_id: &str) -> AppResult<bool> {
+        let row = sqlx::query_scalar!(
+            r#"SELECT EXISTS(
+                   SELECT 1 FROM scraped_entries
+                   WHERE source_id = ? AND external_id = ?
+               ) as "exists!: bool""#,
+            source_id,
+            external_id,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// (source_id, external_id) を処理済みとして記録。既存なら何もしない（冪等）。
+    pub async fn mark_scraped(&self, source_id: &str, external_id: &str) -> AppResult<()> {
+        sqlx::query!(
+            r#"INSERT OR IGNORE INTO scraped_entries (source_id, external_id)
+               VALUES (?, ?)"#,
+            source_id,
+            external_id,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn pick_recent_addition(
         &self,
         since: chrono::DateTime<chrono::Utc>,
@@ -603,6 +631,56 @@ mod tests {
         assert_eq!(card.sources[0].source_url, "https://example.com/pitchfork/p1");
         assert_eq!(card.sources[1].source_id, "rokinon");
         assert_eq!(card.sources[1].source_url, "https://example.com/rokinon/r1");
+    }
+
+    #[tokio::test]
+    async fn is_scraped_returns_false_for_unknown_entry() {
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool);
+        assert!(!repo.is_scraped("rokinon", "999999").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn mark_scraped_then_is_scraped_returns_true() {
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool);
+        repo.mark_scraped("rokinon", "12345").await.unwrap();
+        assert!(repo.is_scraped("rokinon", "12345").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn is_scraped_is_scoped_by_source_id() {
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool);
+        repo.mark_scraped("rokinon", "12345").await.unwrap();
+        assert!(!repo.is_scraped("pitchfork", "12345").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn mark_scraped_is_idempotent() {
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool);
+        repo.mark_scraped("rokinon", "12345").await.unwrap();
+        // 二度目でも PRIMARY KEY 衝突エラーにならない
+        repo.mark_scraped("rokinon", "12345").await.unwrap();
+        assert!(repo.is_scraped("rokinon", "12345").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn bootstrap_statement_seeds_scraped_entries_from_recommendations() {
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool.clone());
+        // recommendation を1件入れてから bootstrap 文を実行（migration の INSERT...SELECT を再現）
+        repo.upsert(sample("777")).await.unwrap();
+        sqlx::query(
+            "INSERT OR IGNORE INTO scraped_entries (source_id, external_id, scraped_at) \
+             SELECT source_id, source_external_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM recommendations",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // sample() の source_id は "rokinon"、 external_id は引数 ("777")
+        assert!(repo.is_scraped("rokinon", "777").await.unwrap());
     }
 
     #[tokio::test]
