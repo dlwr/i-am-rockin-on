@@ -75,13 +75,58 @@ fn normalize_album_name(raw: &str) -> String {
     trimmed.to_string()
 }
 
+/// 記事本文（#entryBody）のスコープ済み HTML とテキスト。
+pub struct ArticleBody {
+    pub html: String,
+    pub text: String,
+}
+
+/// フル記事ページ HTML から本文コンテナ `#entryBody`（= `.articleText`）を取り出す。
+/// サイドバーや関連記事を除外するため、抽出はこのスコープ内に限定する。
+pub fn extract_article_body(page_html: &str) -> Option<ArticleBody> {
+    let doc = Html::parse_document(page_html);
+    let sel = Selector::parse("#entryBody").ok()?;
+    let el = doc.select(&sel).next()?;
+    Some(ArticleBody {
+        html: el.inner_html(),
+        text: el.text().collect::<String>(),
+    })
+}
+
+/// フル記事ページの `<meta property="og:title">` から記事タイトルを取り出す。
+/// 装飾の全角括弧 `『』` を除去し、前後空白を trim する。
+pub fn extract_entry_title(page_html: &str) -> Option<String> {
+    let doc = Html::parse_document(page_html);
+    let sel = Selector::parse(r#"meta[property="og:title"]"#).ok()?;
+    let raw = doc.select(&sel).next()?.value().attr("content")?;
+    let cleaned = raw.replace(['『', '』'], "");
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// 記事本文 HTML から最初の YouTube リンクを取り出す。
+/// まず `<a href>`、無ければ `<iframe src>`（埋め込み）を探す。
 pub fn extract_youtube_url(entry_html: &str) -> Option<String> {
     let frag = Html::parse_fragment(entry_html);
-    let sel = Selector::parse("a[href]").ok()?;
-    frag.select(&sel)
-        .filter_map(|el| el.value().attr("href"))
-        .find(|href| href.contains("youtube.com") || href.contains("youtu.be"))
+    let is_yt = |s: &str| s.contains("youtube.com") || s.contains("youtu.be");
+
+    if let Ok(a_sel) = Selector::parse("a[href]") {
+        if let Some(href) = frag
+            .select(&a_sel)
+            .filter_map(|el| el.value().attr("href"))
+            .find(|h| is_yt(h))
+        {
+            return Some(href.to_string());
+        }
+    }
+    let iframe_sel = Selector::parse("iframe[src]").ok()?;
+    frag.select(&iframe_sel)
+        .filter_map(|el| el.value().attr("src"))
+        .find(|s| is_yt(s))
         .map(|s| s.to_string())
 }
 
@@ -339,5 +384,60 @@ mod tests {
             .await
             .unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn extract_article_body_scopes_to_entry_body() {
+        let page = fixture("entry-12966301740.html");
+        let body = extract_article_body(&page).expect("entryBody present");
+        // entryBody 内の推しマーカーを検出（外側のサイドバー分は含めない）
+        assert_eq!(
+            detect_oshi(&body.text),
+            Some(NaiveDate::from_ymd_opt(2026, 5, 1).unwrap())
+        );
+    }
+
+    #[test]
+    fn extract_album_from_scoped_body_returns_ogp_title() {
+        let page = fixture("entry-12966301740.html");
+        let body = extract_article_body(&page).expect("entryBody present");
+        // 本文に h2 は無く ogpCard_title から取得される
+        assert_eq!(
+            extract_album_from_html(&body.html).unwrap(),
+            "The Secret To Good Living"
+        );
+    }
+
+    #[test]
+    fn extract_youtube_from_scoped_body_returns_playlist_link() {
+        let page = fixture("entry-12966301740.html");
+        let body = extract_article_body(&page).expect("entryBody present");
+        assert_eq!(
+            extract_youtube_url(&body.html).unwrap(),
+            "https://www.youtube.com/playlist?list=OLAK5uy_n-3r7edlfatPi4p5z1KuG-wCI-0NP88ug"
+        );
+    }
+
+    #[test]
+    fn extract_youtube_url_falls_back_to_iframe() {
+        let html = r#"<p>no anchor</p><iframe src="https://www.youtube.com/embed/abc123?x=1"></iframe>"#;
+        assert_eq!(
+            extract_youtube_url(html).unwrap(),
+            "https://www.youtube.com/embed/abc123?x=1"
+        );
+    }
+
+    #[test]
+    fn extract_entry_title_reads_og_title_and_strips_brackets() {
+        let page = fixture("entry-12966301740.html");
+        let title = extract_entry_title(&page).unwrap();
+        assert_eq!(title, "Hiding Places  の新作");
+    }
+
+    #[test]
+    fn extract_artist_from_og_title_yields_clean_name() {
+        let page = fixture("entry-12966301740.html");
+        let title = extract_entry_title(&page).unwrap();
+        assert_eq!(extract_artist_name(&title), "Hiding Places");
     }
 }
