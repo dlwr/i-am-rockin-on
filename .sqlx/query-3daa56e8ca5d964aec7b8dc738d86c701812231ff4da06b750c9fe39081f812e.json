@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO scraped_entries (source_id, external_id)\n               VALUES (?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3daa56e8ca5d964aec7b8dc738d86c701812231ff4da06b750c9fe39081f812e"
+}

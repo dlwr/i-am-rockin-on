@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS(\n                   SELECT 1 FROM scraped_entries\n                   WHERE source_id = ? AND external_id = ?\n               ) as \"exists!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "exists!: bool",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bff196a92d627e0d5578aeef138325886e7d98c306d1832a2c0fa18bc9ff37d0"
+}
