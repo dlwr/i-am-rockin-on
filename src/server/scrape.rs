@@ -31,7 +31,7 @@ enum ProcessResult {
 }
 
 /// 候補が一定数以上あるのに 1 件も保存に至らんかった場合は、 ソースの構造変化
-/// (RSS セレクタ崩れ等) を疑って error ログで警告する。 候補が少ない日は通常運行
+/// (セレクタ崩れ等) を疑って error ログで警告する。 候補が少ない日は通常運行
 /// なので 5 を閾値とする。
 fn should_warn_zero_items(candidates_count: usize, added: i64, updated: i64) -> bool {
     candidates_count > 5 && added + updated == 0
@@ -166,7 +166,7 @@ mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    // 0件抽出警告の判定 (RSS 構造変化の早期検知用)
+    // 0件抽出警告の判定 (ソース構造変化の早期検知用)
     #[test]
     fn warn_when_candidates_exceed_threshold_and_no_items() {
         assert!(should_warn_zero_items(6, 0, 0), "6 candidates, 0 items → warn");
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn no_warn_when_few_candidates() {
-        // 候補そのものが少ない日は通常運行 (RSS が空でも珍しくない)
+        // 候補そのものが少ない日は通常運行 (候補が空でも珍しくない)
         assert!(!should_warn_zero_items(5, 0, 0), "boundary: 5 → no warn");
         assert!(!should_warn_zero_items(0, 0, 0), "0 candidates → no warn");
         assert!(!should_warn_zero_items(1, 0, 0), "1 candidate → no warn");

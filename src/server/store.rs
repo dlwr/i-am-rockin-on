@@ -667,6 +667,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bootstrap_statement_seeds_scraped_entries_from_recommendations() {
+        let pool = setup_pool().await;
+        let repo = RecommendationRepo::new(pool.clone());
+        // recommendation を1件入れてから bootstrap 文を実行（migration の INSERT...SELECT を再現）
+        repo.upsert(sample("777")).await.unwrap();
+        sqlx::query(
+            "INSERT OR IGNORE INTO scraped_entries (source_id, external_id, scraped_at) \
+             SELECT source_id, source_external_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM recommendations",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // sample() の source_id は "rokinon"、 external_id は引数 ("777")
+        assert!(repo.is_scraped("rokinon", "777").await.unwrap());
+    }
+
+    #[tokio::test]
     async fn pick_recent_addition_coalesces_optional_fields_across_sources_in_same_group() {
         use chrono::{Duration, Utc};
         let pool = setup_pool().await;
