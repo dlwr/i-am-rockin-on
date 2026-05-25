@@ -53,17 +53,29 @@ SELECT source_id, source_external_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 FROM recommendations;
 ```
 
-- [ ] **Step 2: マイグレーションが適用できることを確認**
+- [ ] **Step 2: 一時 DB でマイグレーション + bootstrap を検証**
 
-Run: `DATABASE_URL=sqlite:data/app.db cargo sqlx migrate run`
-Expected: `Applied 20260525000001/migrate scraped_entries` のような成功出力。エラーが出ないこと。
+開発用 `data/app.db` を不可逆に進めないため、使い捨て DB で検証する。bootstrap が効くことを確認するため、先に recommendations を1件入れてから migrate する:
 
-- [ ] **Step 3: bootstrap が効いているか確認**
+```bash
+rm -f /tmp/rokinon-migtest.db
+DATABASE_URL=sqlite:/tmp/rokinon-migtest.db cargo sqlx database create
+# 既存マイグレーションだけ先に適用して recommendations を1件入れる
+DATABASE_URL=sqlite:/tmp/rokinon-migtest.db sqlx migrate run --target-version 20260508000001
+sqlite3 /tmp/rokinon-migtest.db "INSERT INTO recommendations (source_id, source_url, source_external_id, featured_at, artist_name) VALUES ('rokinon','https://x/entry-1.html','1','2026-05-01','A');"
+# 新マイグレーションを適用（bootstrap が走る）
+DATABASE_URL=sqlite:/tmp/rokinon-migtest.db sqlx migrate run
+# bootstrap で recommendations と同数になっているか
+sqlite3 /tmp/rokinon-migtest.db "SELECT count(*) FROM scraped_entries;"  # => 1
+sqlite3 /tmp/rokinon-migtest.db "SELECT count(*) FROM recommendations;"  # => 1
+rm -f /tmp/rokinon-migtest.db
+```
 
-Run: `sqlite3 data/app.db "SELECT count(*) FROM scraped_entries;"` と `sqlite3 data/app.db "SELECT count(*) FROM recommendations;"`
-Expected: scraped_entries の件数 == recommendations の件数（bootstrap で全件コピーされた）。
+Expected: scraped_entries の件数 == recommendations の件数（bootstrap で全件コピーされた）。エラーが出ないこと。
 
-- [ ] **Step 4: コミット**
+> 開発 DB (`data/app.db`) への適用は実装完了後（Task 8 の手動検証）か本番デプロイ時の自動 migrate に任せる。Task 2 のユニットテストも `sqlx::migrate!()` をインメモリに適用して新テーブルを検証する。
+
+- [ ] **Step 3: コミット**
 
 ```bash
 git add migrations/20260525000001_scraped_entries.sql
@@ -284,13 +296,99 @@ async fn process_candidate_marks_scraped_after_non_oshi() {
     pipeline.run().await.unwrap();
     assert!(repo.is_scraped("fake", "e2").await.unwrap(), "非推しも mark される");
 }
+
+// Spotify mock を使い「成功 → mark」「no-match → mark しない」を検証する。
+// 既存 FakeSource（items から候補列挙＋推しを返す）と with_endpoints を流用。
+// scrape.rs:244 の pipeline_records_added_count_when_spotify_album_matches と同じ mock パターン。
+fn oshi_item() -> NewRecommendation {
+    NewRecommendation {
+        source_id: "fake".into(),
+        source_url: "https://example.com/1".into(),
+        source_external_id: "1".into(),
+        featured_at: NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+        artist_name: "Foo".into(),
+        album_name: Some("Bar".into()),
+        track_name: None,
+        spotify_url: None,
+        spotify_image_url: None,
+        youtube_url: None,
+    }
+}
+
+#[tokio::test]
+async fn process_candidate_marks_scraped_on_spotify_success() {
+    use wiremock::{matchers::{method, path}, Mock, MockServer, ResponseTemplate};
+    let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+    sqlx::migrate!().run(&pool).await.unwrap();
+    let repo = Arc::new(RecommendationRepo::new(pool.clone()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "tok", "token_type": "Bearer", "expires_in": 3600
+        }))).mount(&server).await;
+    Mock::given(method("GET")).and(path("/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "albums": { "items": [{
+                "external_urls": { "spotify": "https://open.spotify.com/album/abc" },
+                "images": [{ "url": "https://i.scdn.co/image/abc.jpg" }]
+            }] }
+        }))).mount(&server).await;
+    let resolver = SpotifyResolver::new("id".into(), "sec".into())
+        .with_endpoints(format!("{}/token", server.uri()), format!("{}/search", server.uri()));
+
+    let pipeline = ScrapePipeline {
+        source: Arc::new(FakeSource { items: vec![oshi_item()] }),
+        resolver: Arc::new(resolver),
+        repo: repo.clone(),
+        log: Arc::new(ScrapeLog::new(pool)),
+        cancel: CancellationToken::new(),
+        throttle_ms: 0,
+    };
+    let outcome = pipeline.run().await.unwrap();
+    assert_eq!(outcome.items_added, 1);
+    assert!(repo.is_scraped("fake", "1").await.unwrap(), "成功時は mark される");
+}
+
+#[tokio::test]
+async fn process_candidate_does_not_mark_on_spotify_no_match() {
+    use wiremock::{matchers::{method, path}, Mock, MockServer, ResponseTemplate};
+    let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+    sqlx::migrate!().run(&pool).await.unwrap();
+    let repo = Arc::new(RecommendationRepo::new(pool.clone()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "tok", "token_type": "Bearer", "expires_in": 3600
+        }))).mount(&server).await;
+    // albums.items 空 → no-match
+    Mock::given(method("GET")).and(path("/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "albums": { "items": [] }
+        }))).mount(&server).await;
+    let resolver = SpotifyResolver::new("id".into(), "sec".into())
+        .with_endpoints(format!("{}/token", server.uri()), format!("{}/search", server.uri()));
+
+    let pipeline = ScrapePipeline {
+        source: Arc::new(FakeSource { items: vec![oshi_item()] }),
+        resolver: Arc::new(resolver),
+        repo: repo.clone(),
+        log: Arc::new(ScrapeLog::new(pool)),
+        cancel: CancellationToken::new(),
+        throttle_ms: 0,
+    };
+    let outcome = pipeline.run().await.unwrap();
+    assert_eq!(outcome.items_added, 0);
+    assert!(!repo.is_scraped("fake", "1").await.unwrap(), "no-match は mark しない（次回リトライ）");
+}
 ```
 
-> 注: `process_candidate_marks_scraped_after_non_oshi` は Spotify 解決に到達しないので外部通信なし。`CountingSource` のテストは既処理スキップで fetch に到達しないため、Spotify 解決にも到達しない（外部通信なし）。「推し成功時に mark」「transient 失敗時に mark しない」は Spotify モックが必要で既存テスト基盤に無いため、ここでは検証しない（実装はレビューで確認）。
+> 注: HTTP fetch error（transient）で mark しない経路は `run_inner` の `Err(e) => items_skipped += 1`（mark 呼び出しなし）で担保される。`fetch_and_extract` が `Err` を返すフェイクを足してもよいが、上記4テストで mark の境界（既処理スキップ / 非推し mark / 成功 mark / no-match 非mark）は網羅できている。
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `cargo test --features ssr process_candidate_skips_fetch process_candidate_marks_scraped`
+Run: `cargo test --features ssr process_candidate`
 Expected: FAIL。既処理でも fetch されてしまう（`fetch_calls == 1`）、または非推しで mark されない。
 
 - [ ] **Step 3: 実装**
@@ -363,8 +461,8 @@ async fn process_candidate(
 
 - [ ] **Step 4: テストが通ることを確認**
 
-Run: `cargo test --features ssr process_candidate_skips_fetch process_candidate_marks_scraped`
-Expected: 両テスト PASS。
+Run: `cargo test --features ssr process_candidate`
+Expected: 4テストすべて PASS。
 
 - [ ] **Step 5: 既存パイプラインテストが壊れていないことを確認**
 
@@ -878,7 +976,7 @@ git commit -m "feat(rokinon): RSS から entrylist 走査 + フルページ fetc
         Arc::new(RokinonAdapter::new(cfg.rokinon_max_pages, cfg.scrape_throttle_ms));
 ```
 
-（`cfg` がスコープにあることを確認。無ければ `Config::from_env()` の戻り値名に合わせる。）
+（`main.rs` には `let cfg = Config::from_env()?;` があり `cfg` で参照可能。）
 
 - [ ] **Step 2: bin/scrape.rs を更新**
 
