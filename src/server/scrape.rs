@@ -95,9 +95,21 @@ impl ScrapePipeline {
         &self,
         c: &crate::server::adapter::source::CandidateRef,
     ) -> AppResult<ProcessResult> {
+        let source_id = self.source.id();
+        // 既処理ならフルページ fetch を回避してスキップ
+        if self.repo.is_scraped(source_id, &c.source_external_id).await? {
+            return Ok(ProcessResult::Skipped);
+        }
+
         let extracted = match self.source.fetch_and_extract(c).await? {
             Some(item) => item,
-            None => return Ok(ProcessResult::Skipped),
+            None => {
+                // 非推し（取り込み対象外）も処理済みとして記録し、再 fetch を防ぐ
+                self.repo
+                    .mark_scraped(source_id, &c.source_external_id)
+                    .await?;
+                return Ok(ProcessResult::Skipped);
+            }
         };
         let mut new_rec = extracted;
         match self
@@ -118,6 +130,7 @@ impl ScrapePipeline {
                     album = ?new_rec.album_name,
                     "spotify album match not found; skipping recommendation"
                 );
+                // transient の可能性があるので mark しない（次回リトライ）
                 return Ok(ProcessResult::Skipped);
             }
             Err(e) => {
@@ -126,10 +139,15 @@ impl ScrapePipeline {
                     artist = %new_rec.artist_name,
                     "spotify resolve failed; skipping recommendation (will retry next scrape)"
                 );
+                // transient。mark しない（次回リトライ）
                 return Ok(ProcessResult::Skipped);
             }
         }
         let (_, inserted) = self.repo.upsert(new_rec).await?;
+        // 推し + Spotify 解決成功 → 処理済みとして記録
+        self.repo
+            .mark_scraped(source_id, &c.source_external_id)
+            .await?;
         Ok(if inserted {
             ProcessResult::Inserted
         } else {
@@ -146,6 +164,7 @@ mod tests {
     use async_trait::async_trait;
     use chrono::NaiveDate;
     use sqlx::sqlite::SqlitePoolOptions;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     // 0件抽出警告の判定 (RSS 構造変化の早期検知用)
     #[test]
@@ -416,6 +435,236 @@ mod tests {
         assert_eq!(outcome.items_added, 0, "Spotify Err must not save row");
         assert_eq!(outcome.items_updated, 0);
         assert_eq!(outcome.items_skipped, 1);
+    }
+
+    // fetch_and_extract の呼び出し回数を記録するフェイク。常に推しを1件返す。
+    struct CountingSource {
+        fetch_calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl MediaSource for CountingSource {
+        fn id(&self) -> &'static str {
+            "fake"
+        }
+        async fn list_candidates(&self) -> AppResult<Vec<CandidateRef>> {
+            Ok(vec![CandidateRef {
+                source_external_id: "e1".into(),
+                source_url: "https://example.com/entry-e1.html".into(),
+            }])
+        }
+        async fn fetch_and_extract(
+            &self,
+            _c: &CandidateRef,
+        ) -> AppResult<Option<NewRecommendation>> {
+            self.fetch_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(NewRecommendation {
+                source_id: "fake".into(),
+                source_url: "https://example.com/entry-e1.html".into(),
+                source_external_id: "e1".into(),
+                featured_at: NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+                artist_name: "Artist".into(),
+                album_name: Some("Album".into()),
+                track_name: None,
+                spotify_url: None,
+                spotify_image_url: None,
+                youtube_url: None,
+            }))
+        }
+    }
+
+    fn oshi_item() -> NewRecommendation {
+        NewRecommendation {
+            source_id: "fake".into(),
+            source_url: "https://example.com/1".into(),
+            source_external_id: "1".into(),
+            featured_at: NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+            artist_name: "Foo".into(),
+            album_name: Some("Bar".into()),
+            track_name: None,
+            spotify_url: None,
+            spotify_image_url: None,
+            youtube_url: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn process_candidate_skips_fetch_when_already_scraped() {
+        let pool = SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let repo = Arc::new(crate::server::store::RecommendationRepo::new(pool.clone()));
+        repo.mark_scraped("fake", "e1").await.unwrap();
+
+        let fetch_calls = Arc::new(AtomicUsize::new(0));
+        let pipeline = ScrapePipeline {
+            source: Arc::new(CountingSource {
+                fetch_calls: fetch_calls.clone(),
+            }),
+            // is_scraped ガードで fetch/resolve に到達しないため Spotify mock は不要
+            resolver: Arc::new(SpotifyResolver::new("id".into(), "secret".into())),
+            repo,
+            log: Arc::new(ScrapeLog::new(pool)),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            throttle_ms: 0,
+        };
+        let outcome = pipeline.run().await.unwrap();
+        assert_eq!(
+            fetch_calls.load(Ordering::SeqCst),
+            0,
+            "既処理なら fetch しない"
+        );
+        assert_eq!(outcome.items_skipped, 1);
+    }
+
+    #[tokio::test]
+    async fn process_candidate_marks_scraped_after_non_oshi() {
+        let pool = SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let repo = Arc::new(crate::server::store::RecommendationRepo::new(pool.clone()));
+
+        struct NoneSource;
+        #[async_trait]
+        impl MediaSource for NoneSource {
+            fn id(&self) -> &'static str {
+                "fake"
+            }
+            async fn list_candidates(&self) -> AppResult<Vec<CandidateRef>> {
+                Ok(vec![CandidateRef {
+                    source_external_id: "e2".into(),
+                    source_url: "https://example.com/entry-e2.html".into(),
+                }])
+            }
+            async fn fetch_and_extract(
+                &self,
+                _c: &CandidateRef,
+            ) -> AppResult<Option<NewRecommendation>> {
+                Ok(None)
+            }
+        }
+
+        let pipeline = ScrapePipeline {
+            source: Arc::new(NoneSource),
+            resolver: Arc::new(SpotifyResolver::new("id".into(), "secret".into())),
+            repo: repo.clone(),
+            log: Arc::new(ScrapeLog::new(pool)),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            throttle_ms: 0,
+        };
+        pipeline.run().await.unwrap();
+        assert!(
+            repo.is_scraped("fake", "e2").await.unwrap(),
+            "非推しも mark される"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_candidate_marks_scraped_on_spotify_success() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let pool = SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let repo = Arc::new(crate::server::store::RecommendationRepo::new(pool.clone()));
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "tok", "token_type": "Bearer", "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "albums": { "items": [{
+                    "external_urls": { "spotify": "https://open.spotify.com/album/abc" },
+                    "images": [{ "url": "https://i.scdn.co/image/abc.jpg" }]
+                }] }
+            })))
+            .mount(&server)
+            .await;
+        let resolver = SpotifyResolver::new("id".into(), "sec".into()).with_endpoints(
+            format!("{}/token", server.uri()),
+            format!("{}/search", server.uri()),
+        );
+
+        let pipeline = ScrapePipeline {
+            source: Arc::new(FakeSource {
+                items: vec![oshi_item()],
+            }),
+            resolver: Arc::new(resolver),
+            repo: repo.clone(),
+            log: Arc::new(ScrapeLog::new(pool)),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            throttle_ms: 0,
+        };
+        pipeline.run().await.unwrap();
+        assert!(
+            repo.is_scraped("fake", "1").await.unwrap(),
+            "成功時は mark される"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_candidate_does_not_mark_on_spotify_no_match() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let pool = SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let repo = Arc::new(crate::server::store::RecommendationRepo::new(pool.clone()));
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "tok", "token_type": "Bearer", "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        // albums.items 空 → no-match
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "albums": { "items": [] }
+            })))
+            .mount(&server)
+            .await;
+        let resolver = SpotifyResolver::new("id".into(), "sec".into()).with_endpoints(
+            format!("{}/token", server.uri()),
+            format!("{}/search", server.uri()),
+        );
+
+        let pipeline = ScrapePipeline {
+            source: Arc::new(FakeSource {
+                items: vec![oshi_item()],
+            }),
+            resolver: Arc::new(resolver),
+            repo: repo.clone(),
+            log: Arc::new(ScrapeLog::new(pool)),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            throttle_ms: 0,
+        };
+        pipeline.run().await.unwrap();
+        assert!(
+            !repo.is_scraped("fake", "1").await.unwrap(),
+            "no-match は mark しない（次回リトライ）"
+        );
     }
 
     #[tokio::test]
