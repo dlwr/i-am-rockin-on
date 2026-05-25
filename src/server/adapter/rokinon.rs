@@ -6,11 +6,11 @@ use chrono::NaiveDate;
 use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::LazyLock;
-use tokio::sync::Mutex;
 
-const ROKINON_BASE: &str = "https://ameblo.jp/stamedba";
+const ROKINON_BASE_HOST: &str = "https://ameblo.jp";
+const ROKINON_ENTRYLIST_DIR: &str = "/stamedba";
 const USER_AGENT: &str = "i-am-rockin-on bot/1.0 (+https://github.com/dlwr/i-am-rockin-on)";
 
 static OSHI_PATTERN: LazyLock<Regex> =
@@ -130,22 +130,15 @@ pub fn extract_youtube_url(entry_html: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-#[derive(Debug, Clone)]
-struct CachedItem {
-    title: String,
-    body_html: String,
-}
-
 pub struct RokinonAdapter {
     client: Client,
     base_url: String,
-    /// list_candidates が RSS から取得した本文を fetch_and_extract で再利用するキャッシュ。
-    /// pipeline.run() の 1 サイクル内でのみ有効。
-    cache: Mutex<HashMap<String, CachedItem>>,
+    max_pages: u32,
+    throttle_ms: u64,
 }
 
 impl RokinonAdapter {
-    pub fn new() -> Self {
+    pub fn new(max_pages: u32, throttle_ms: u64) -> Self {
         let client = Client::builder()
             .user_agent(USER_AGENT)
             .timeout(std::time::Duration::from_secs(30))
@@ -153,25 +146,20 @@ impl RokinonAdapter {
             .expect("reqwest client builds");
         Self {
             client,
-            base_url: ROKINON_BASE.to_string(),
-            cache: Mutex::new(HashMap::new()),
+            base_url: ROKINON_BASE_HOST.to_string(),
+            max_pages,
+            throttle_ms,
         }
     }
 
     pub fn with_base_url(base_url: impl Into<String>) -> Self {
-        let mut me = Self::new();
+        let mut me = Self::new(5, 0);
         me.base_url = base_url.into();
         me
     }
 
     fn entry_id_from_link(link: &str) -> Option<String> {
         ENTRY_ID_PATTERN.captures(link)?.get(1).map(|m| m.as_str().to_string())
-    }
-}
-
-impl Default for RokinonAdapter {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -182,37 +170,52 @@ impl MediaSource for RokinonAdapter {
     }
 
     async fn list_candidates(&self) -> AppResult<Vec<CandidateRef>> {
-        let url = format!("{}/rss20.xml", self.base_url);
-        let bytes = self.client.get(&url).send().await?.bytes().await?;
-        let channel = rss::Channel::read_from(&bytes[..])
-            .map_err(|e| AppError::Parse(format!("RSS parse error: {e}")))?;
-
-        let mut cache = self.cache.lock().await;
-        cache.clear();
-
+        let entry_link_sel = Selector::parse("a[href]")
+            .map_err(|e| AppError::Parse(format!("selector: {e}")))?;
+        let mut seen = HashSet::new();
         let mut out = Vec::new();
-        for item in channel.into_items() {
-            let link = match item.link {
-                Some(l) => l,
-                None => continue,
+
+        for page in 1..=self.max_pages {
+            let url = if page == 1 {
+                format!("{}{}/entrylist.html", self.base_url, ROKINON_ENTRYLIST_DIR)
+            } else {
+                format!("{}{}/entrylist-{}.html", self.base_url, ROKINON_ENTRYLIST_DIR, page)
             };
-            let entry_id = match Self::entry_id_from_link(&link) {
-                Some(id) => id,
-                None => continue,
+            let resp = self.client.get(&url).send().await?;
+            if !resp.status().is_success() {
+                tracing::warn!(status = %resp.status(), %url, "entrylist fetch failed; stopping pagination");
+                break;
+            }
+            let body = resp.text().await?;
+            let found_any = {
+                let doc = Html::parse_document(&body);
+                let mut any = false;
+                for el in doc.select(&entry_link_sel) {
+                    let href = match el.value().attr("href") {
+                        Some(h) => h,
+                        None => continue,
+                    };
+                    let entry_id = match Self::entry_id_from_link(href) {
+                        Some(id) => id,
+                        None => continue,
+                    };
+                    if seen.insert(entry_id.clone()) {
+                        any = true;
+                        out.push(CandidateRef {
+                            source_external_id: entry_id,
+                            source_url: href.to_string(),
+                        });
+                    }
+                }
+                any
             };
-            let title = item.title.unwrap_or_default();
-            let body_html = item.description.unwrap_or_default();
-            cache.insert(
-                entry_id.clone(),
-                CachedItem {
-                    title,
-                    body_html,
-                },
-            );
-            out.push(CandidateRef {
-                source_external_id: entry_id,
-                source_url: link,
-            });
+            if !found_any {
+                break;
+            }
+            // index ページ取得の間も Ameblo への礼儀として throttle を挟む（候補ループの throttle とは別）
+            if self.throttle_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(self.throttle_ms)).await;
+            }
         }
         Ok(out)
     }
@@ -221,28 +224,31 @@ impl MediaSource for RokinonAdapter {
         &self,
         candidate: &CandidateRef,
     ) -> AppResult<Option<NewRecommendation>> {
-        let cached = {
-            let cache = self.cache.lock().await;
-            cache.get(&candidate.source_external_id).cloned()
-        };
-        let item = match cached {
-            Some(i) => i,
+        let resp = self.client.get(&candidate.source_url).send().await?;
+        if !resp.status().is_success() {
+            return Err(AppError::Parse(format!(
+                "entry fetch failed: {} {}",
+                resp.status(),
+                candidate.source_url
+            )));
+        }
+        let page = resp.text().await?;
+
+        let body = match extract_article_body(&page) {
+            Some(b) => b,
             None => {
-                tracing::warn!(
-                    id = %candidate.source_external_id,
-                    "candidate not in RSS cache; skipping"
-                );
+                tracing::warn!(url = %candidate.source_url, "entryBody not found; skipping (suspect markup change)");
                 return Ok(None);
             }
         };
-
-        let featured_at = match detect_oshi(&item.body_html) {
+        let featured_at = match detect_oshi(&body.text) {
             Some(d) => d,
             None => return Ok(None),
         };
-        let artist = extract_artist_name(&item.title);
-        let album = extract_album_from_html(&item.body_html);
-        let youtube = extract_youtube_url(&item.body_html);
+        let title = extract_entry_title(&page).unwrap_or_default();
+        let artist = extract_artist_name(&title);
+        let album = extract_album_from_html(&body.html);
+        let youtube = extract_youtube_url(&body.html);
 
         Ok(Some(NewRecommendation {
             source_id: "rokinon".into(),
@@ -327,63 +333,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_candidates_parses_rss_fixture() {
+    async fn list_candidates_paginates_entrylist_and_dedupes() {
         use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
-        let body = std::fs::read_to_string("tests/fixtures/rokinon/rss20.xml").unwrap();
-        Mock::given(path("/rss20.xml"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(body)
-                    .insert_header("content-type", "application/rss+xml; charset=utf-8"),
-            )
+        let p1 = std::fs::read_to_string("tests/fixtures/rokinon/entrylist.html").unwrap();
+        let p2 = std::fs::read_to_string("tests/fixtures/rokinon/entrylist-2.html").unwrap();
+        Mock::given(path("/stamedba/entrylist.html"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(p1))
+            .mount(&server)
+            .await;
+        Mock::given(path("/stamedba/entrylist-2.html"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(p2))
             .mount(&server)
             .await;
 
         let adapter = RokinonAdapter::with_base_url(server.uri());
         let cands = adapter.list_candidates().await.unwrap();
-        assert_eq!(cands.len(), 10, "RSS fixture has 10 items");
-        assert!(cands.iter().all(|c| c.source_url.contains("/entry-")));
+        let ids: Vec<&str> = cands.iter().map(|c| c.source_external_id.as_str()).collect();
+        // page1 で2件（重複排除済み）+ page2 で対象1件 = 3件
+        assert_eq!(cands.len(), 3, "page をまたいで重複排除し全件列挙");
+        assert!(ids.contains(&"12966301740"), "対象記事が候補に含まれる");
+        assert!(ids.iter().all(|id| !id.is_empty()));
     }
 
     #[tokio::test]
-    async fn fetch_and_extract_returns_oshi_items_from_rss() {
+    async fn list_candidates_stops_pagination_on_404() {
         use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
-        let body = std::fs::read_to_string("tests/fixtures/rokinon/rss20.xml").unwrap();
-        Mock::given(path("/rss20.xml"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        let p1 = std::fs::read_to_string("tests/fixtures/rokinon/entrylist.html").unwrap();
+        Mock::given(path("/stamedba/entrylist.html"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(p1))
+            .mount(&server)
+            .await;
+        // entrylist-2 以降は 404 → ページネーション打ち切り
+        Mock::given(path("/stamedba/entrylist-2.html"))
+            .respond_with(ResponseTemplate::new(404))
             .mount(&server)
             .await;
 
         let adapter = RokinonAdapter::with_base_url(server.uri());
         let cands = adapter.list_candidates().await.unwrap();
-
-        let mut oshi_count = 0;
-        let mut artists = Vec::new();
-        for c in &cands {
-            if let Some(rec) = adapter.fetch_and_extract(c).await.unwrap() {
-                oshi_count += 1;
-                artists.push(rec.artist_name.clone());
-            }
-        }
-        assert_eq!(oshi_count, 3, "RSS fixture has 3 推し items");
-        // 各 artist がきちんと抽出され、空文字でないこと
-        assert!(artists.iter().all(|a| !a.is_empty()));
+        assert_eq!(cands.len(), 2, "page1 の2件のみ");
     }
 
     #[tokio::test]
-    async fn fetch_and_extract_skips_when_not_in_cache() {
-        let adapter = RokinonAdapter::new();
-        // list_candidates を呼ばずに fetch_and_extract を呼ぶ → cache 空 → None
-        let result = adapter
-            .fetch_and_extract(&CandidateRef {
-                source_external_id: "999999".into(),
-                source_url: "https://example.com/entry-999999.html".into(),
-            })
-            .await
-            .unwrap();
-        assert!(result.is_none());
+    async fn fetch_and_extract_returns_oshi_from_full_page() {
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let page = std::fs::read_to_string("tests/fixtures/rokinon/entry-12966301740.html").unwrap();
+        Mock::given(path("/stamedba/entry-12966301740.html"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(page))
+            .mount(&server)
+            .await;
+
+        let adapter = RokinonAdapter::with_base_url(server.uri());
+        let candidate = CandidateRef {
+            source_external_id: "12966301740".into(),
+            source_url: format!("{}/stamedba/entry-12966301740.html", server.uri()),
+        };
+        let rec = adapter.fetch_and_extract(&candidate).await.unwrap().unwrap();
+        assert_eq!(rec.artist_name, "Hiding Places");
+        assert_eq!(rec.featured_at, NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
+        assert_eq!(rec.album_name.as_deref(), Some("The Secret To Good Living"));
     }
 
     #[test]

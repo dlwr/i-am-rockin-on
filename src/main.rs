@@ -42,7 +42,8 @@ async fn main() -> anyhow::Result<()> {
     let log = Arc::new(ScrapeLog::new(pool.clone()));
     let cancel = CancellationToken::new();
 
-    let rokinon_source: Arc<dyn MediaSource> = Arc::new(RokinonAdapter::new());
+    let rokinon_source: Arc<dyn MediaSource> =
+        Arc::new(RokinonAdapter::new(cfg.rokinon_max_pages, cfg.scrape_throttle_ms));
     let rokinon_pipeline = Arc::new(ScrapePipeline {
         source: rokinon_source,
         resolver: resolver.clone(),
