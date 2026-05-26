@@ -161,6 +161,17 @@ impl RokinonAdapter {
     fn entry_id_from_link(link: &str) -> Option<String> {
         ENTRY_ID_PATTERN.captures(link)?.get(1).map(|m| m.as_str().to_string())
     }
+
+    /// entrylist の href を絶対 URL に解決する。実 ameblo は相対パス
+    /// (`/stamedba/entry-….html`) を返すため、ホスト (`base_url`) を前置する。
+    /// 既に絶対 URL の場合はそのまま返す。
+    fn make_absolute(&self, href: &str) -> String {
+        if href.starts_with("http://") || href.starts_with("https://") {
+            href.to_string()
+        } else {
+            format!("{}{}", self.base_url, href)
+        }
+    }
 }
 
 #[async_trait]
@@ -203,7 +214,7 @@ impl MediaSource for RokinonAdapter {
                         any = true;
                         out.push(CandidateRef {
                             source_external_id: entry_id,
-                            source_url: href.to_string(),
+                            source_url: self.make_absolute(href),
                         });
                     }
                 }
@@ -354,6 +365,42 @@ mod tests {
         assert_eq!(cands.len(), 3, "page をまたいで重複排除し全件列挙");
         assert!(ids.contains(&"12966301740"), "対象記事が候補に含まれる");
         assert!(ids.iter().all(|id| !id.is_empty()));
+        // 実 entrylist は相対 href (`/stamedba/entry-...`) を返す。fetch できるよう
+        // source_url は絶対 URL に解決されていること。
+        assert!(
+            cands
+                .iter()
+                .all(|c| c.source_url.starts_with("http://") || c.source_url.starts_with("https://")),
+            "source_url は fetch 可能な絶対 URL であること"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_candidates_produces_fetchable_absolute_urls() {
+        // 実 entrylist は相対 href を返す。list_candidates が絶対 URL に解決し、
+        // その URL で fetch_and_extract が実際に記事を取得できることを end-to-end で検証（回帰防止）。
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let el = std::fs::read_to_string("tests/fixtures/rokinon/entrylist-2.html").unwrap();
+        let page = std::fs::read_to_string("tests/fixtures/rokinon/entry-12966301740.html").unwrap();
+        Mock::given(path("/stamedba/entrylist.html"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(el))
+            .mount(&server)
+            .await;
+        Mock::given(path("/stamedba/entry-12966301740.html"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(page))
+            .mount(&server)
+            .await;
+
+        let adapter = RokinonAdapter::with_base_url(server.uri());
+        let cands = adapter.list_candidates().await.unwrap();
+        let target = cands
+            .iter()
+            .find(|c| c.source_external_id == "12966301740")
+            .expect("対象が列挙される");
+        // 相対 href のままだと client.get が builder error で Err になる。絶対 URL なら Some が返る。
+        let rec = adapter.fetch_and_extract(target).await.unwrap().unwrap();
+        assert_eq!(rec.artist_name, "Hiding Places");
     }
 
     #[tokio::test]
