@@ -26,6 +26,32 @@ pub fn detect_oshi(entry_text: &str) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(year, month, 1)
 }
 
+/// 記事 HTML の JSON-LD (`@type: BlogPosting`) から `datePublished` を取り出し、
+/// 記事の実公開日を返す。
+///
+/// ameblo の `datePublished` は JST (`+09:00`) で配信されるため、 UTC へ変換すると
+/// 日付が1日前にずれる。 オフセットを保持した `date_naive()` でその日の日付を返す。
+pub fn extract_publish_date(entry_html: &str) -> Option<NaiveDate> {
+    let frag = Html::parse_document(entry_html);
+    let sel = Selector::parse(r#"script[type="application/ld+json"]"#).ok()?;
+    for el in frag.select(&sel) {
+        let text = el.text().collect::<String>();
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        if v.get("@type").and_then(|x| x.as_str()) != Some("BlogPosting") {
+            continue;
+        }
+        let Some(date_str) = v.get("datePublished").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(date_str) {
+            return Some(dt.date_naive());
+        }
+    }
+    None
+}
+
 /// "{Artist Name} の新作" 形式からアーティスト名を抽出。
 pub fn extract_artist_name(title: &str) -> String {
     for suffix in [
@@ -252,10 +278,20 @@ impl MediaSource for RokinonAdapter {
                 return Ok(None);
             }
         };
-        let featured_at = match detect_oshi(&body.text) {
+        // 妥当性ゲート: 「YYYYMM推し」マーカーが無い記事は対象外。
+        let oshi_month = match detect_oshi(&body.text) {
             Some(d) => d,
             None => return Ok(None),
         };
+        // 並び順を記事の新旧で揃えるため、 featured_at は記事の実公開日を使う。
+        // datePublished が取れない場合のみ推し月の月初へフォールバックする。
+        let featured_at = extract_publish_date(&page).unwrap_or_else(|| {
+            tracing::warn!(
+                url = %candidate.source_url,
+                "datePublished not found; falling back to oshi month-start"
+            );
+            oshi_month
+        });
         let title = extract_entry_title(&page).unwrap_or_default();
         let artist = extract_artist_name(&title);
         let album = extract_album_from_html(&body.html);
@@ -295,6 +331,22 @@ mod tests {
     #[test]
     fn detect_oshi_returns_none_when_marker_absent() {
         assert!(detect_oshi("no marker here").is_none());
+    }
+
+    #[test]
+    fn extract_publish_date_reads_blogposting_date_in_jst() {
+        // fixture の datePublished は "2026-05-16T08:46:17.000+09:00" (JST)。
+        // UTC 変換すると 2026-05-15 にずれるため、JST のままの日付を返すこと。
+        let page = fixture("entry-12966301740.html");
+        assert_eq!(
+            extract_publish_date(&page),
+            Some(NaiveDate::from_ymd_opt(2026, 5, 16).unwrap())
+        );
+    }
+
+    #[test]
+    fn extract_publish_date_returns_none_when_absent() {
+        assert!(extract_publish_date("<html><body>no ld+json</body></html>").is_none());
     }
 
     #[test]
@@ -424,7 +476,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_and_extract_returns_oshi_from_full_page() {
+    async fn fetch_and_extract_uses_actual_publish_date_as_featured_at() {
         use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
         let page = std::fs::read_to_string("tests/fixtures/rokinon/entry-12966301740.html").unwrap();
@@ -440,8 +492,31 @@ mod tests {
         };
         let rec = adapter.fetch_and_extract(&candidate).await.unwrap().unwrap();
         assert_eq!(rec.artist_name, "Hiding Places");
-        assert_eq!(rec.featured_at, NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
+        // 推し月の月初 (2026-05-01) ではなく記事の実公開日 (2026-05-16) を使う。
+        assert_eq!(rec.featured_at, NaiveDate::from_ymd_opt(2026, 5, 16).unwrap());
         assert_eq!(rec.album_name.as_deref(), Some("The Secret To Good Living"));
+    }
+
+    #[tokio::test]
+    async fn fetch_and_extract_falls_back_to_oshi_month_when_no_publish_date() {
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        // datePublished を持つ JSON-LD を除いた fixture。 推しマーカーは残る。
+        let page =
+            std::fs::read_to_string("tests/fixtures/rokinon/entry-no-datepublished.html").unwrap();
+        Mock::given(path("/stamedba/entry-12966301740.html"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(page))
+            .mount(&server)
+            .await;
+
+        let adapter = RokinonAdapter::with_base_url(server.uri());
+        let candidate = CandidateRef {
+            source_external_id: "12966301740".into(),
+            source_url: format!("{}/stamedba/entry-12966301740.html", server.uri()),
+        };
+        let rec = adapter.fetch_and_extract(&candidate).await.unwrap().unwrap();
+        // 実公開日が取れないので推し月の月初へフォールバックする。
+        assert_eq!(rec.featured_at, NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
     }
 
     #[test]
