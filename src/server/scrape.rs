@@ -112,35 +112,58 @@ impl ScrapePipeline {
             }
         };
         let mut new_rec = extracted;
-        match self
-            .resolver
-            .resolve(&new_rec.artist_name, new_rec.album_name.as_deref())
-            .await
+        // funkstudy のようにアダプタが Spotify アルバム URL を確定済みなら、
+        // 名前検索ではなく album id で直接メタデータを解決する。
+        if let Some(album_id) = new_rec
+            .spotify_url
+            .as_deref()
+            .and_then(crate::server::resolver::spotify::spotify_album_id_from_url)
         {
-            Ok(Some(m)) => {
-                new_rec.spotify_url = Some(m.url);
-                new_rec.spotify_image_url = m.image_url;
-                if new_rec.track_name.is_none() {
-                    new_rec.track_name = m.track_name;
+            match self.resolver.resolve_by_album_id(&album_id).await {
+                Ok(Some(meta)) => {
+                    new_rec.artist_name = meta.artist_name;
+                    new_rec.album_name = Some(meta.album_name);
+                    new_rec.spotify_url = Some(meta.url);
+                    new_rec.spotify_image_url = meta.image_url;
+                }
+                Ok(None) => {
+                    tracing::info!(album_id = %album_id, "spotify album id not found; skipping");
+                    return Ok(ProcessResult::Skipped);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, album_id = %album_id, "spotify album resolve failed; will retry next scrape");
+                    return Ok(ProcessResult::Skipped);
                 }
             }
-            Ok(None) => {
-                tracing::info!(
-                    artist = %new_rec.artist_name,
-                    album = ?new_rec.album_name,
-                    "spotify album match not found; skipping recommendation"
-                );
-                // transient の可能性があるので mark しない（次回リトライ）
-                return Ok(ProcessResult::Skipped);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    artist = %new_rec.artist_name,
-                    "spotify resolve failed; skipping recommendation (will retry next scrape)"
-                );
-                // transient。mark しない（次回リトライ）
-                return Ok(ProcessResult::Skipped);
+        } else {
+            match self
+                .resolver
+                .resolve(&new_rec.artist_name, new_rec.album_name.as_deref())
+                .await
+            {
+                Ok(Some(m)) => {
+                    new_rec.spotify_url = Some(m.url);
+                    new_rec.spotify_image_url = m.image_url;
+                    if new_rec.track_name.is_none() {
+                        new_rec.track_name = m.track_name;
+                    }
+                }
+                Ok(None) => {
+                    tracing::info!(
+                        artist = %new_rec.artist_name,
+                        album = ?new_rec.album_name,
+                        "spotify album match not found; skipping recommendation"
+                    );
+                    return Ok(ProcessResult::Skipped);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        artist = %new_rec.artist_name,
+                        "spotify resolve failed; skipping recommendation (will retry next scrape)"
+                    );
+                    return Ok(ProcessResult::Skipped);
+                }
             }
         }
         let (_, inserted) = self.repo.upsert(new_rec).await?;
@@ -665,6 +688,77 @@ mod tests {
             !repo.is_scraped("fake", "1").await.unwrap(),
             "no-match は mark しない（次回リトライ）"
         );
+    }
+
+    #[tokio::test]
+    async fn pipeline_resolves_by_album_id_when_spotify_url_preset() {
+        use wiremock::{matchers::{method, path}, Mock, MockServer, ResponseTemplate};
+
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "tok", "token_type": "Bearer", "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/albums/abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "Resolved Album",
+                "artists": [{ "name": "Resolved Artist" }],
+                "images": [{ "url": "https://i.scdn.co/image/y.jpg" }],
+                "external_urls": { "spotify": "https://open.spotify.com/album/abc123" }
+            })))
+            .mount(&server)
+            .await;
+
+        let resolver = Arc::new(
+            SpotifyResolver::new("id".into(), "sec".into())
+                .with_endpoints(format!("{}/token", server.uri()), format!("{}/search", server.uri()))
+                .with_albums_url(format!("{}/albums", server.uri())),
+        );
+        let source = Arc::new(FakeSource {
+            items: vec![NewRecommendation {
+                source_id: "funkstudy".into(),
+                source_url: "https://x.com/taizooo/status/1".into(),
+                source_external_id: "1".into(),
+                featured_at: NaiveDate::from_ymd_opt(2026, 5, 30).unwrap(),
+                artist_name: String::new(),
+                album_name: None,
+                track_name: None,
+                spotify_url: Some("https://open.spotify.com/album/abc123".into()),
+                spotify_image_url: None,
+                youtube_url: None,
+            }],
+        });
+        let repo = Arc::new(RecommendationRepo::new(pool.clone()));
+        let pipeline = ScrapePipeline {
+            source,
+            resolver,
+            repo: repo.clone(),
+            log: Arc::new(ScrapeLog::new(pool.clone())),
+            cancel: CancellationToken::new(),
+            throttle_ms: 0,
+        };
+        let _ = repo;
+        let outcome = pipeline.run().await.unwrap();
+        assert_eq!(outcome.items_added, 1);
+
+        let row: (String, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT artist_name, album_name, spotify_url, spotify_image_url \
+             FROM recommendations WHERE source_external_id = '1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "Resolved Artist");
+        assert_eq!(row.1.as_deref(), Some("Resolved Album"));
+        assert_eq!(row.2.as_deref(), Some("https://open.spotify.com/album/abc123"));
+        assert_eq!(row.3.as_deref(), Some("https://i.scdn.co/image/y.jpg"));
     }
 
     #[tokio::test]
