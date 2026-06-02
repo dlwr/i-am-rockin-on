@@ -1,6 +1,8 @@
 use crate::server::error::AppResult;
+use regex::Regex;
 use reqwest::Client;
 use serde::Deserialize;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -101,6 +103,15 @@ impl SpotifyResolver {
 /// `"` と `\` を取り除く。 これらが混ざると field filter parser が壊れて silent miss する。
 fn sanitize_query_value(s: &str) -> String {
     s.chars().filter(|c| *c != '"' && *c != '\\').collect()
+}
+
+static ALBUM_ID_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"open\.spotify\.com/album/([A-Za-z0-9]+)").unwrap());
+
+/// `open.spotify.com/album/<id>` から base62 の album id を取り出す。
+/// `?si=...` クエリや末尾スラッシュは char class の範囲外なので自然に切れる。
+pub fn spotify_album_id_from_url(url: &str) -> Option<String> {
+    ALBUM_ID_RE.captures(url).map(|c| c[1].to_string())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -296,5 +307,27 @@ mod tests {
         );
         let m = r.resolve("Nope", Some("Nope")).await.unwrap();
         assert!(m.is_none());
+    }
+
+    #[test]
+    fn album_id_extracted_from_plain_url() {
+        assert_eq!(
+            spotify_album_id_from_url("https://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy"),
+            Some("4aawyAB9vmqN3uQ7FjRGTy".to_string())
+        );
+    }
+
+    #[test]
+    fn album_id_extracted_ignoring_query_and_trailing() {
+        assert_eq!(
+            spotify_album_id_from_url("http://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy?si=abc123"),
+            Some("4aawyAB9vmqN3uQ7FjRGTy".to_string())
+        );
+    }
+
+    #[test]
+    fn non_album_url_returns_none() {
+        assert_eq!(spotify_album_id_from_url("https://open.spotify.com/track/123"), None);
+        assert_eq!(spotify_album_id_from_url("not a url"), None);
     }
 }
