@@ -2,6 +2,7 @@
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     use axum::Router;
+    use i_am_rockin_on::server::adapter::funkstudy::FunkstudyAdapter;
     use i_am_rockin_on::server::adapter::pitchfork::PitchforkAdapter;
     use i_am_rockin_on::server::adapter::rokinon::RokinonAdapter;
     use i_am_rockin_on::server::adapter::source::MediaSource;
@@ -67,6 +68,26 @@ async fn main() -> anyhow::Result<()> {
         throttle_ms: cfg.scrape_throttle_ms,
     });
 
+    let funkstudy_on = cfg.funkstudy_enabled && cfg.funkstudy_api_key.is_some();
+    let funkstudy_pipeline = funkstudy_on.then(|| {
+        let source: Arc<dyn MediaSource> = Arc::new(FunkstudyAdapter::new(
+            cfg.funkstudy_api_key.clone().expect("checked by funkstudy_on"),
+            cfg.funkstudy_screen_name.clone(),
+            cfg.funkstudy_backfill_days,
+        ));
+        Arc::new(ScrapePipeline {
+            source,
+            resolver: resolver.clone(),
+            repo: repo.clone(),
+            log: log.clone(),
+            cancel: cancel.clone(),
+            throttle_ms: cfg.scrape_throttle_ms,
+        })
+    });
+    if !funkstudy_on {
+        tracing::info!("funkstudy source disabled (FUNKSTUDY_API_KEY 未設定 or FUNKSTUDY_ENABLED=0)");
+    }
+
     // Visual regression tests set DISABLE_SCRAPE=1 to keep the DB pristine —
     // we want full control over the row set without the scheduler racing in.
     let scrape_disabled = std::env::var("DISABLE_SCRAPE").ok().as_deref() == Some("1");
@@ -89,12 +110,24 @@ async fn main() -> anyhow::Result<()> {
                 }
             });
         }
+        if let Some(p) = funkstudy_pipeline.clone() {
+            let l = log.clone();
+            tokio::spawn(async move {
+                if let Err(e) = run_initial_scrape_if_empty(p, l, "funkstudy").await {
+                    tracing::error!(error = %e, "initial funkstudy scrape failed");
+                }
+            });
+        }
     }
 
     let scheduler = new_scheduler().await?;
     if !scrape_disabled {
         add_scrape_job(&scheduler, rokinon_pipeline.clone(), "0 0 19 * * *").await?;
         add_scrape_job(&scheduler, pitchfork_pipeline.clone(), "0 0 7 * * *").await?;
+        if let Some(p) = funkstudy_pipeline.clone() {
+            // UTC 22:00 = JST 07:00（rokinon 04:00 / pitchfork 16:00 とずらす）
+            add_scrape_job(&scheduler, p, "0 0 22 * * *").await?;
+        }
     }
     let _sched = scheduler;
 

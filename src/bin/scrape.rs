@@ -2,6 +2,7 @@
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     use clap::Parser;
+    use i_am_rockin_on::server::adapter::funkstudy::FunkstudyAdapter;
     use i_am_rockin_on::server::adapter::pitchfork::PitchforkAdapter;
     use i_am_rockin_on::server::adapter::rokinon::RokinonAdapter;
     use i_am_rockin_on::server::adapter::source::MediaSource;
@@ -44,6 +45,17 @@ async fn main() -> anyhow::Result<()> {
             cfg.pitchfork_recency_days,
             cfg.pitchfork_max_pages,
         )),
+        "funkstudy" => {
+            let key = cfg
+                .funkstudy_api_key
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("FUNKSTUDY_API_KEY required for --source funkstudy"))?;
+            Arc::new(FunkstudyAdapter::new(
+                key,
+                cfg.funkstudy_screen_name.clone(),
+                cfg.funkstudy_backfill_days,
+            ))
+        }
         other => anyhow::bail!("unknown source: {other}"),
     };
     let resolver = Arc::new(SpotifyResolver::new(
