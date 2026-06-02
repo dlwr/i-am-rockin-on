@@ -1,0 +1,28 @@
+{
+  "tweets": [
+    {
+      "id": "2042213290000000001",
+      "url": "https://x.com/taizooo/status/2042213290000000001",
+      "text": "https://t.co/E07xvGQfmZ",
+      "createdAt": "Thu Apr 09 12:09:25 +0000 2026",
+      "author": { "userName": "taizooo" },
+      "entities": {
+        "urls": [
+          { "expanded_url": "https://open.spotify.com/album/7e8llQbStheFoOuhyvJGLo?si=AmOgtyfQQQqDRb8B1iQkkg" }
+        ]
+      }
+    },
+    {
+      "id": "2042213253716341074",
+      "url": "https://x.com/taizooo/status/2042213253716341074",
+      "text": "#yetanotherfunkstudy https://t.co/7AJGS2mz0x",
+      "createdAt": "Thu Apr 09 12:09:16 +0000 2026",
+      "author": { "userName": "taizooo" },
+      "entities": { "urls": [] }
+    }
+  ],
+  "has_next_page": false,
+  "next_cursor": "",
+  "status": "success",
+  "msg": ""
+}

@@ -26,6 +26,7 @@ mise run dev
 # 手動スクレイプ（既定: rokinon）
 mise run scrape
 # 別ソース指定: cargo run --features ssr --bin scrape -- --source pitchfork
+# 別ソース指定: cargo run --features ssr --bin scrape -- --source funkstudy
 
 # テスト (Rust)
 mise run test
@@ -40,6 +41,7 @@ mise run visual
 現在の取り込み元:
 - **rokinon** — Ameblo の「ロキノンには騙されないぞ」RSS から `YYYYMM推し` 記事を抽出
 - **pitchfork** — Pitchfork のアルバムレビューから直近 `PITCHFORK_RECENCY_DAYS` 日 ・ score `PITCHFORK_SCORE_THRESHOLD` 以上を抽出
+- **funkstudy** — X の taizooo (`FUNKSTUDY_SCREEN_NAME`) の `#yetanotherfunkstudy` 付きポストを twitterapi.io 経由で拾い、 ぶら下がる返信中の Spotify アルバム URL から取り込む
 
 新メディアを足す場合は `MediaSource` trait を `impl` し、 `main.rs` で `add_scrape_job` を 1 行追加する。
 
@@ -55,6 +57,10 @@ mise run visual
 | `PITCHFORK_RECENCY_DAYS` | no | `90` | Pitchfork 取り込みの直近日数 |
 | `PITCHFORK_MAX_PAGES` | no | `3` | Pitchfork index ページネーション上限 |
 | `SCRAPE_THROTTLE_MS` | no | `800` | 候補処理の合間に挟む sleep。 `0` で skip |
+| `FUNKSTUDY_API_KEY` | no | — | twitterapi.io の API キー。 未設定なら funkstudy ソースは無効 |
+| `FUNKSTUDY_ENABLED` | no | `1` | `0` で funkstudy ソースを無効化 |
+| `FUNKSTUDY_SCREEN_NAME` | no | `taizooo` | 監視する X アカウント |
+| `FUNKSTUDY_BACKFILL_DAYS` | no | `30` | advanced_search で遡る日数 |
 | `DISABLE_SCRAPE` | no | — | `1` で initial scrape と定期スケジューラを抑止。 視覚回帰テスト向けの knob |
 
 ## ヘルスチェック

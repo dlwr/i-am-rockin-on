@@ -1,0 +1,12 @@
+{
+  "replies": [
+    {
+      "id": "1004",
+      "text": "いいね",
+      "createdAt": "Sat May 30 12:01:00 +0000 2026",
+      "author": { "userName": "taizooo" }
+    }
+  ],
+  "has_next_page": false,
+  "next_cursor": ""
+}

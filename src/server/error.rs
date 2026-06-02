@@ -10,6 +10,8 @@ pub enum AppError {
     Parse(String),
     #[error("config error: {0}")]
     Config(String),
+    #[error("retryable: {0}")]
+    Retryable(String),
 }
 
 pub type AppResult<T> = Result<T, AppError>;
@@ -22,5 +24,11 @@ mod tests {
     fn parse_error_displays_message() {
         let err = AppError::Parse("missing entry_text".into());
         assert_eq!(err.to_string(), "parse error: missing entry_text");
+    }
+
+    #[test]
+    fn retryable_error_displays_message() {
+        let err = AppError::Retryable("spotify reply not found yet".into());
+        assert_eq!(err.to_string(), "retryable: spotify reply not found yet");
     }
 }

@@ -11,6 +11,11 @@ pub struct Config {
     pub rokinon_max_pages: u32,
     /// 候補処理の合間に挟むレートリミット用 sleep。 短くすると検証時の運用が速くなる
     pub scrape_throttle_ms: u64,
+    /// twitterapi.io の API キー。 未設定なら funkstudy ソースは登録されない
+    pub funkstudy_api_key: Option<String>,
+    pub funkstudy_enabled: bool,
+    pub funkstudy_screen_name: String,
+    pub funkstudy_backfill_days: i64,
 }
 
 impl Config {
@@ -42,6 +47,18 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(800),
+            funkstudy_api_key: std::env::var("FUNKSTUDY_API_KEY")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            funkstudy_enabled: std::env::var("FUNKSTUDY_ENABLED").ok().as_deref() != Some("0"),
+            funkstudy_screen_name: std::env::var("FUNKSTUDY_SCREEN_NAME")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "taizooo".into()),
+            funkstudy_backfill_days: std::env::var("FUNKSTUDY_BACKFILL_DAYS")
+                .ok()
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(30),
         })
     }
 }
@@ -91,6 +108,34 @@ mod tests {
         if let Some(v) = saved_pages { std::env::set_var("PITCHFORK_MAX_PAGES", v); }
         if let Some(v) = saved_throttle { std::env::set_var("SCRAPE_THROTTLE_MS", v); }
         if let Some(v) = saved_rokinon_pages { std::env::set_var("ROKINON_MAX_PAGES", v); } else { std::env::remove_var("ROKINON_MAX_PAGES"); }
+        if let Some(v) = saved_db { std::env::set_var("DATABASE_URL", v); } else { std::env::remove_var("DATABASE_URL"); }
+    }
+
+    #[test]
+    fn funkstudy_defaults_when_env_absent() {
+        let saved_db = std::env::var("DATABASE_URL").ok();
+        let saved_key = std::env::var("FUNKSTUDY_API_KEY").ok();
+        let saved_name = std::env::var("FUNKSTUDY_SCREEN_NAME").ok();
+        let saved_days = std::env::var("FUNKSTUDY_BACKFILL_DAYS").ok();
+        let saved_enabled = std::env::var("FUNKSTUDY_ENABLED").ok();
+        std::env::remove_var("FUNKSTUDY_API_KEY");
+        std::env::remove_var("FUNKSTUDY_SCREEN_NAME");
+        std::env::remove_var("FUNKSTUDY_BACKFILL_DAYS");
+        std::env::remove_var("FUNKSTUDY_ENABLED");
+        std::env::set_var("DATABASE_URL", "sqlite::memory:");
+        std::env::set_var("SPOTIFY_CLIENT_ID", "x");
+        std::env::set_var("SPOTIFY_CLIENT_SECRET", "y");
+
+        let cfg = Config::from_env().unwrap();
+        assert!(cfg.funkstudy_api_key.is_none());
+        assert_eq!(cfg.funkstudy_screen_name, "taizooo");
+        assert_eq!(cfg.funkstudy_backfill_days, 30);
+        assert!(cfg.funkstudy_enabled);
+
+        if let Some(v) = saved_key { std::env::set_var("FUNKSTUDY_API_KEY", v); }
+        if let Some(v) = saved_name { std::env::set_var("FUNKSTUDY_SCREEN_NAME", v); }
+        if let Some(v) = saved_days { std::env::set_var("FUNKSTUDY_BACKFILL_DAYS", v); }
+        if let Some(v) = saved_enabled { std::env::set_var("FUNKSTUDY_ENABLED", v); }
         if let Some(v) = saved_db { std::env::set_var("DATABASE_URL", v); } else { std::env::remove_var("DATABASE_URL"); }
     }
 }

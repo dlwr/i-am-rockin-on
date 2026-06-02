@@ -32,9 +32,16 @@ enum ProcessResult {
 
 /// 候補が一定数以上あるのに 1 件も保存に至らんかった場合は、 ソースの構造変化
 /// (セレクタ崩れ等) を疑って error ログで警告する。 候補が少ない日は通常運行
-/// なので 5 を閾値とする。
-fn should_warn_zero_items(candidates_count: usize, added: i64, updated: i64) -> bool {
-    candidates_count > 5 && added + updated == 0
+/// なので 5 を閾値とする。 transient エラー (funkstudy の「Spotify 返信待ち」等で
+/// Err(Retryable) を返した候補) は構造変化の兆候ではないので、 errored を除いた
+/// 候補数で判定する。 これが無いと funkstudy は返信ラグだけで毎回 0 件警告を出す。
+fn should_warn_zero_items(
+    candidates_count: usize,
+    errored: usize,
+    added: i64,
+    updated: i64,
+) -> bool {
+    candidates_count.saturating_sub(errored) > 5 && added + updated == 0
 }
 
 impl ScrapePipeline {
@@ -52,6 +59,8 @@ impl ScrapePipeline {
         let candidates = self.source.list_candidates().await?;
         let candidates_count = candidates.len();
         let mut outcome = ScrapeOutcome::default();
+        // candidate fetch が Err で落ちた数。 構造変化の警告判定から除外する。
+        let mut errored = 0usize;
         for c in candidates {
             if self.cancel.is_cancelled() {
                 tracing::info!(
@@ -71,6 +80,7 @@ impl ScrapePipeline {
                         "skipping candidate due to error"
                     );
                     outcome.items_skipped += 1;
+                    errored += 1;
                 }
             }
             if self.throttle_ms > 0 {
@@ -79,6 +89,7 @@ impl ScrapePipeline {
         }
         if should_warn_zero_items(
             candidates_count,
+            errored,
             outcome.items_added,
             outcome.items_updated,
         ) {
@@ -112,35 +123,58 @@ impl ScrapePipeline {
             }
         };
         let mut new_rec = extracted;
-        match self
-            .resolver
-            .resolve(&new_rec.artist_name, new_rec.album_name.as_deref())
-            .await
+        // funkstudy のようにアダプタが Spotify アルバム URL を確定済みなら、
+        // 名前検索ではなく album id で直接メタデータを解決する。
+        if let Some(album_id) = new_rec
+            .spotify_url
+            .as_deref()
+            .and_then(crate::server::resolver::spotify::spotify_album_id_from_url)
         {
-            Ok(Some(m)) => {
-                new_rec.spotify_url = Some(m.url);
-                new_rec.spotify_image_url = m.image_url;
-                if new_rec.track_name.is_none() {
-                    new_rec.track_name = m.track_name;
+            match self.resolver.resolve_by_album_id(&album_id).await {
+                Ok(Some(meta)) => {
+                    new_rec.artist_name = meta.artist_name;
+                    new_rec.album_name = Some(meta.album_name);
+                    new_rec.spotify_url = Some(meta.url);
+                    new_rec.spotify_image_url = meta.image_url;
+                }
+                Ok(None) => {
+                    tracing::info!(album_id = %album_id, "spotify album id not found; skipping");
+                    return Ok(ProcessResult::Skipped);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, album_id = %album_id, "spotify album resolve failed; will retry next scrape");
+                    return Ok(ProcessResult::Skipped);
                 }
             }
-            Ok(None) => {
-                tracing::info!(
-                    artist = %new_rec.artist_name,
-                    album = ?new_rec.album_name,
-                    "spotify album match not found; skipping recommendation"
-                );
-                // transient の可能性があるので mark しない（次回リトライ）
-                return Ok(ProcessResult::Skipped);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    artist = %new_rec.artist_name,
-                    "spotify resolve failed; skipping recommendation (will retry next scrape)"
-                );
-                // transient。mark しない（次回リトライ）
-                return Ok(ProcessResult::Skipped);
+        } else {
+            match self
+                .resolver
+                .resolve(&new_rec.artist_name, new_rec.album_name.as_deref())
+                .await
+            {
+                Ok(Some(m)) => {
+                    new_rec.spotify_url = Some(m.url);
+                    new_rec.spotify_image_url = m.image_url;
+                    if new_rec.track_name.is_none() {
+                        new_rec.track_name = m.track_name;
+                    }
+                }
+                Ok(None) => {
+                    tracing::info!(
+                        artist = %new_rec.artist_name,
+                        album = ?new_rec.album_name,
+                        "spotify album match not found; skipping recommendation"
+                    );
+                    return Ok(ProcessResult::Skipped);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        artist = %new_rec.artist_name,
+                        "spotify resolve failed; skipping recommendation (will retry next scrape)"
+                    );
+                    return Ok(ProcessResult::Skipped);
+                }
             }
         }
         let (_, inserted) = self.repo.upsert(new_rec).await?;
@@ -169,22 +203,32 @@ mod tests {
     // 0件抽出警告の判定 (ソース構造変化の早期検知用)
     #[test]
     fn warn_when_candidates_exceed_threshold_and_no_items() {
-        assert!(should_warn_zero_items(6, 0, 0), "6 candidates, 0 items → warn");
-        assert!(should_warn_zero_items(100, 0, 0), "many candidates, 0 items → warn");
+        assert!(should_warn_zero_items(6, 0, 0, 0), "6 candidates, 0 items → warn");
+        assert!(should_warn_zero_items(100, 0, 0, 0), "many candidates, 0 items → warn");
     }
 
     #[test]
     fn no_warn_when_some_items_extracted() {
-        assert!(!should_warn_zero_items(6, 1, 0), "added=1 → no warn");
-        assert!(!should_warn_zero_items(6, 0, 1), "updated=1 → no warn");
+        assert!(!should_warn_zero_items(6, 0, 1, 0), "added=1 → no warn");
+        assert!(!should_warn_zero_items(6, 0, 0, 1), "updated=1 → no warn");
     }
 
     #[test]
     fn no_warn_when_few_candidates() {
         // 候補そのものが少ない日は通常運行 (候補が空でも珍しくない)
-        assert!(!should_warn_zero_items(5, 0, 0), "boundary: 5 → no warn");
-        assert!(!should_warn_zero_items(0, 0, 0), "0 candidates → no warn");
-        assert!(!should_warn_zero_items(1, 0, 0), "1 candidate → no warn");
+        assert!(!should_warn_zero_items(5, 0, 0, 0), "boundary: 5 → no warn");
+        assert!(!should_warn_zero_items(0, 0, 0, 0), "0 candidates → no warn");
+        assert!(!should_warn_zero_items(1, 0, 0, 0), "1 candidate → no warn");
+    }
+
+    #[test]
+    fn no_warn_when_zero_items_explained_by_transient_errors() {
+        // funkstudy: 候補の多くが「Spotify 返信待ち」で Err(Retryable) → errored が候補数を吸収。
+        // 構造変化ではないので警告しない。
+        assert!(!should_warn_zero_items(10, 10, 0, 0), "all errored → no warn");
+        assert!(!should_warn_zero_items(10, 6, 0, 0), "non-errored=4 (≤5) → no warn");
+        // errored を除いても 5 を超える候補が 0 件なら、 やはり構造変化を疑って warn。
+        assert!(should_warn_zero_items(10, 3, 0, 0), "non-errored=7 (>5), 0 items → warn");
     }
 
     struct FakeSource {
@@ -665,6 +709,77 @@ mod tests {
             !repo.is_scraped("fake", "1").await.unwrap(),
             "no-match は mark しない（次回リトライ）"
         );
+    }
+
+    #[tokio::test]
+    async fn pipeline_resolves_by_album_id_when_spotify_url_preset() {
+        use wiremock::{matchers::{method, path}, Mock, MockServer, ResponseTemplate};
+
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "tok", "token_type": "Bearer", "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/albums/abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "Resolved Album",
+                "artists": [{ "name": "Resolved Artist" }],
+                "images": [{ "url": "https://i.scdn.co/image/y.jpg" }],
+                "external_urls": { "spotify": "https://open.spotify.com/album/abc123" }
+            })))
+            .mount(&server)
+            .await;
+
+        let resolver = Arc::new(
+            SpotifyResolver::new("id".into(), "sec".into())
+                .with_endpoints(format!("{}/token", server.uri()), format!("{}/search", server.uri()))
+                .with_albums_url(format!("{}/albums", server.uri())),
+        );
+        let source = Arc::new(FakeSource {
+            items: vec![NewRecommendation {
+                source_id: "funkstudy".into(),
+                source_url: "https://x.com/taizooo/status/1".into(),
+                source_external_id: "1".into(),
+                featured_at: NaiveDate::from_ymd_opt(2026, 5, 30).unwrap(),
+                artist_name: String::new(),
+                album_name: None,
+                track_name: None,
+                spotify_url: Some("https://open.spotify.com/album/abc123".into()),
+                spotify_image_url: None,
+                youtube_url: None,
+            }],
+        });
+        let repo = Arc::new(RecommendationRepo::new(pool.clone()));
+        let pipeline = ScrapePipeline {
+            source,
+            resolver,
+            repo: repo.clone(),
+            log: Arc::new(ScrapeLog::new(pool.clone())),
+            cancel: CancellationToken::new(),
+            throttle_ms: 0,
+        };
+        let _ = repo;
+        let outcome = pipeline.run().await.unwrap();
+        assert_eq!(outcome.items_added, 1);
+
+        let row: (String, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT artist_name, album_name, spotify_url, spotify_image_url \
+             FROM recommendations WHERE source_external_id = '1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "Resolved Artist");
+        assert_eq!(row.1.as_deref(), Some("Resolved Album"));
+        assert_eq!(row.2.as_deref(), Some("https://open.spotify.com/album/abc123"));
+        assert_eq!(row.3.as_deref(), Some("https://i.scdn.co/image/y.jpg"));
     }
 
     #[tokio::test]
