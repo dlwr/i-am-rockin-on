@@ -7,6 +7,7 @@ use regex::Regex;
 use reqwest::Client;
 use serde::Deserialize;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 const DEFAULT_BASE_URL: &str = "https://api.twitterapi.io";
 
@@ -19,27 +20,76 @@ pub struct FunkstudyAdapter {
     api_key: String,
     screen_name: String,
     backfill_days: i64,
-    max_search_pages: u32,
+    /// 429 バックオフの基準。 実測で twitterapi.io は QPS 制限があり、 search 直後の
+    /// replies が弾かれて回復に ~10s かかる。 exponential backoff (base, 2x, 4x) でしのぐ。
+    retry_base: Duration,
+    max_retries: u32,
 }
+
+/// advanced_search 1 ページの最大件数 (twitterapi.io の仕様)。 これ以上は
+/// ページングが要るが、 funkstudy は低頻度なので 30 日窓は 1 ページに余裕で収まる。
+const SEARCH_PAGE_SIZE: usize = 20;
 
 impl FunkstudyAdapter {
     pub fn new(api_key: String, screen_name: String, backfill_days: i64) -> Self {
         Self {
             client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(Duration::from_secs(30))
                 .build()
                 .unwrap(),
             base_url: DEFAULT_BASE_URL.into(),
             api_key,
             screen_name,
             backfill_days,
-            max_search_pages: 5,
+            retry_base: Duration::from_secs(3),
+            max_retries: 3,
         }
     }
 
     pub fn with_base_url(mut self, base_url: String) -> Self {
         self.base_url = base_url;
         self
+    }
+
+    /// テスト用に 429 バックオフ間隔を短縮する。
+    #[cfg(test)]
+    pub fn with_retry_base(mut self, retry_base: Duration) -> Self {
+        self.retry_base = retry_base;
+        self
+    }
+
+    /// twitterapi.io への GET。 429 は Retry-After ヘッダを返さないので exponential
+    /// backoff で max_retries 回までリトライする。 それ以外のステータスは error_for_status
+    /// に委ねる (呼び出し側で transient 判定)。
+    async fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+        params: &[(&str, &str)],
+    ) -> AppResult<T> {
+        let mut attempt = 0u32;
+        loop {
+            let resp = self
+                .client
+                .get(url)
+                .header("X-API-Key", &self.api_key)
+                .query(params)
+                .send()
+                .await?;
+            if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < self.max_retries
+            {
+                let wait = self.retry_base * 2u32.pow(attempt);
+                tracing::info!(
+                    attempt,
+                    wait_ms = wait.as_millis() as u64,
+                    url,
+                    "twitterapi.io 429; backing off and retrying"
+                );
+                tokio::time::sleep(wait).await;
+                attempt += 1;
+                continue;
+            }
+            return Ok(resp.error_for_status()?.json::<T>().await?);
+        }
     }
 }
 
@@ -61,15 +111,13 @@ fn first_spotify_album_url(candidates: &[String]) -> Option<String> {
 struct SearchResponse {
     #[serde(default)]
     tweets: Vec<Tweet>,
-    #[serde(default)]
-    has_next_page: bool,
-    #[serde(default)]
-    next_cursor: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct RepliesResponse {
-    #[serde(default)]
+    // 実 API (twitterapi.io) の replies レスポンスは top-level が `tweets`。
+    // docs は `replies` と記載しているので、 両方受けられるよう alias を張る。
+    #[serde(default, alias = "tweets")]
     replies: Vec<Tweet>,
 }
 
@@ -118,44 +166,40 @@ impl MediaSource for FunkstudyAdapter {
             "from:{} #yetanotherfunkstudy since:{}",
             self.screen_name, since
         );
-        let mut out = Vec::new();
-        let mut cursor = String::new();
-        for page in 0..self.max_search_pages {
-            let resp: SearchResponse = self
-                .client
-                .get(format!("{}/twitter/tweet/advanced_search", self.base_url))
-                .header("X-API-Key", &self.api_key)
-                .query(&[
+        // 1 ページのみ取得する。 twitterapi.io の has_next_page は空ページでも true を
+        // 返す不安定値で、 それを信じてページングすると終端越えの cursor で 429 や
+        // `tweets:null` のデコード失敗を招く。 funkstudy は低頻度なので 1 ページで十分。
+        let url = format!("{}/twitter/tweet/advanced_search", self.base_url);
+        let resp: SearchResponse = self
+            .get_json(
+                &url,
+                &[
                     ("query", query.as_str()),
                     ("queryType", "Latest"),
-                    ("cursor", cursor.as_str()),
-                ])
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-            for t in resp.tweets {
-                let source_url = if t.url.is_empty() {
-                    format!("https://x.com/{}/status/{}", self.screen_name, t.id)
-                } else {
-                    t.url
-                };
-                out.push(CandidateRef {
-                    source_external_id: t.id,
-                    source_url,
-                });
-            }
-            if !resp.has_next_page || resp.next_cursor.is_empty() {
-                break;
-            }
-            cursor = resp.next_cursor;
-            if page + 1 == self.max_search_pages {
-                tracing::warn!(
-                    pages = self.max_search_pages,
-                    "funkstudy advanced_search hit page cap; older posts may be truncated"
-                );
-            }
+                    ("cursor", ""),
+                ],
+            )
+            .await?;
+        let got = resp.tweets.len();
+        let mut out = Vec::with_capacity(got);
+        for t in resp.tweets {
+            let source_url = if t.url.is_empty() {
+                format!("https://x.com/{}/status/{}", self.screen_name, t.id)
+            } else {
+                t.url
+            };
+            out.push(CandidateRef {
+                source_external_id: t.id,
+                source_url,
+            });
+        }
+        // 満杯ページ = 取りこぼしの可能性。 has_next_page は当てにならないので件数で判定し、
+        // silent な truncation を避けるため警告する。
+        if got >= SEARCH_PAGE_SIZE {
+            tracing::warn!(
+                count = got,
+                "funkstudy advanced_search returned a full page; older posts beyond 1 page are not fetched"
+            );
         }
         Ok(out)
     }
@@ -164,18 +208,15 @@ impl MediaSource for FunkstudyAdapter {
         &self,
         candidate: &CandidateRef,
     ) -> AppResult<Option<NewRecommendation>> {
+        let url = format!("{}/twitter/tweet/replies", self.base_url);
         let resp: RepliesResponse = self
-            .client
-            .get(format!("{}/twitter/tweet/replies", self.base_url))
-            .header("X-API-Key", &self.api_key)
-            .query(&[
-                ("tweetId", candidate.source_external_id.as_str()),
-                ("cursor", ""),
-            ])
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
+            .get_json(
+                &url,
+                &[
+                    ("tweetId", candidate.source_external_id.as_str()),
+                    ("cursor", ""),
+                ],
+            )
             .await?;
 
         for reply in resp.replies {
@@ -297,6 +338,68 @@ mod tests {
         assert_eq!(rec.source_external_id, "1001");
         assert_eq!(rec.featured_at, NaiveDate::from_ymd_opt(2026, 5, 30).unwrap());
         assert!(rec.artist_name.is_empty());
+    }
+
+    // 実 API (twitterapi.io) の replies レスポンスは top-level が `replies` ではなく `tweets`、
+    // かつ本体ポスト自身も配列に含む。 実レスポンスを模した fixture で回帰を固定する。
+    #[tokio::test]
+    async fn fetch_and_extract_handles_real_tweets_keyed_replies() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/twitter/tweet/replies"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(fixture("replies_real_shape.json")),
+            )
+            .mount(&server)
+            .await;
+
+        let adapter =
+            FunkstudyAdapter::new("key".into(), "taizooo".into(), 30).with_base_url(server.uri());
+        let cand = CandidateRef {
+            source_external_id: "2042213253716341074".into(),
+            source_url: "https://x.com/taizooo/status/2042213253716341074".into(),
+        };
+        let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
+        assert_eq!(
+            rec.spotify_url.as_deref(),
+            Some("https://open.spotify.com/album/7e8llQbStheFoOuhyvJGLo")
+        );
+        assert_eq!(rec.featured_at, NaiveDate::from_ymd_opt(2026, 4, 9).unwrap());
+    }
+
+    // twitterapi.io は QPS 制限で search 直後の replies を 429 で弾く (実測、 Retry-After なし)。
+    // backoff リトライで自力回復することを検証する。 1 度 429 → 2 度目で 200。
+    #[tokio::test]
+    async fn fetch_and_extract_retries_on_429() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/twitter/tweet/replies"))
+            .respond_with(ResponseTemplate::new(429))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/twitter/tweet/replies"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(fixture("replies_real_shape.json")),
+            )
+            .with_priority(2)
+            .mount(&server)
+            .await;
+
+        let adapter = FunkstudyAdapter::new("key".into(), "taizooo".into(), 30)
+            .with_base_url(server.uri())
+            .with_retry_base(Duration::from_millis(1));
+        let cand = CandidateRef {
+            source_external_id: "2042213253716341074".into(),
+            source_url: "https://x.com/taizooo/status/2042213253716341074".into(),
+        };
+        let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
+        assert_eq!(
+            rec.spotify_url.as_deref(),
+            Some("https://open.spotify.com/album/7e8llQbStheFoOuhyvJGLo")
+        );
     }
 
     #[tokio::test]
