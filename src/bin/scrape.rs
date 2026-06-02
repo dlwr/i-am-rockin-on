@@ -50,11 +50,14 @@ async fn main() -> anyhow::Result<()> {
                 .funkstudy_api_key
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("FUNKSTUDY_API_KEY required for --source funkstudy"))?;
-            Arc::new(FunkstudyAdapter::new(
-                key,
-                cfg.funkstudy_screen_name.clone(),
-                cfg.funkstudy_backfill_days,
-            ))
+            Arc::new(
+                FunkstudyAdapter::new(
+                    key,
+                    cfg.funkstudy_screen_name.clone(),
+                    cfg.funkstudy_backfill_days,
+                )
+                .with_hashtags(cfg.funkstudy_hashtags.clone()),
+            )
         }
         other => anyhow::bail!("unknown source: {other}"),
     };

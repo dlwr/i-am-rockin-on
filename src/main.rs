@@ -70,11 +70,14 @@ async fn main() -> anyhow::Result<()> {
 
     let funkstudy_on = cfg.funkstudy_enabled && cfg.funkstudy_api_key.is_some();
     let funkstudy_pipeline = funkstudy_on.then(|| {
-        let source: Arc<dyn MediaSource> = Arc::new(FunkstudyAdapter::new(
-            cfg.funkstudy_api_key.clone().expect("checked by funkstudy_on"),
-            cfg.funkstudy_screen_name.clone(),
-            cfg.funkstudy_backfill_days,
-        ));
+        let source: Arc<dyn MediaSource> = Arc::new(
+            FunkstudyAdapter::new(
+                cfg.funkstudy_api_key.clone().expect("checked by funkstudy_on"),
+                cfg.funkstudy_screen_name.clone(),
+                cfg.funkstudy_backfill_days,
+            )
+            .with_hashtags(cfg.funkstudy_hashtags.clone()),
+        );
         Arc::new(ScrapePipeline {
             source,
             resolver: resolver.clone(),

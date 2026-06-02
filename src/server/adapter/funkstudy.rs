@@ -20,6 +20,8 @@ pub struct FunkstudyAdapter {
     api_key: String,
     screen_name: String,
     backfill_days: i64,
+    /// 取り込む `#yetanother…study` 系ハッシュタグ（`#` 抜き）。 複数なら OR 検索。
+    hashtags: Vec<String>,
     /// 429 バックオフの基準。 実測で twitterapi.io は QPS 制限があり、 search 直後の
     /// replies が弾かれて回復に ~10s かかる。 exponential backoff (base, 2x, 4x) でしのぐ。
     retry_base: Duration,
@@ -41,6 +43,10 @@ impl FunkstudyAdapter {
             api_key,
             screen_name,
             backfill_days,
+            hashtags: vec![
+                "yetanotherfunkstudy".into(),
+                "yetanotherbachstudy".into(),
+            ],
             retry_base: Duration::from_secs(3),
             max_retries: 3,
         }
@@ -48,6 +54,14 @@ impl FunkstudyAdapter {
 
     pub fn with_base_url(mut self, base_url: String) -> Self {
         self.base_url = base_url;
+        self
+    }
+
+    /// 取り込むハッシュタグ集合を差し替える（`#` 抜きの語）。 空 Vec は無視して既定を保つ。
+    pub fn with_hashtags(mut self, hashtags: Vec<String>) -> Self {
+        if !hashtags.is_empty() {
+            self.hashtags = hashtags;
+        }
         self
     }
 
@@ -91,6 +105,23 @@ impl FunkstudyAdapter {
             return Ok(resp.error_for_status()?.json::<T>().await?);
         }
     }
+}
+
+/// twitterapi.io advanced_search のクエリを組む。 ハッシュタグが複数なら
+/// `(#a OR #b)` で OR 検索する（funk / bach 等を 1 ソースでまとめて拾う）。
+fn build_query(screen_name: &str, hashtags: &[String], since: &str) -> String {
+    let clause = match hashtags {
+        [one] => format!("#{one}"),
+        many => {
+            let joined = many
+                .iter()
+                .map(|h| format!("#{h}"))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            format!("({joined})")
+        }
+    };
+    format!("from:{screen_name} {clause} since:{since}")
 }
 
 /// twitter の `createdAt`（例: "Sat May 30 12:00:00 +0000 2026"）を JST 日付に変換する。
@@ -162,10 +193,7 @@ impl MediaSource for FunkstudyAdapter {
         let since = (Utc::now() - chrono::Duration::days(self.backfill_days))
             .format("%Y-%m-%d")
             .to_string();
-        let query = format!(
-            "from:{} #yetanotherfunkstudy since:{}",
-            self.screen_name, since
-        );
+        let query = build_query(&self.screen_name, &self.hashtags, &since);
         // 1 ページのみ取得する。 twitterapi.io の has_next_page は空ページでも true を
         // 返す不安定値で、 それを信じてページングすると終端越えの cursor で 429 や
         // `tweets:null` のデコード失敗を招く。 funkstudy は低頻度なので 1 ページで十分。
@@ -278,6 +306,22 @@ mod tests {
         // 2026-05-30 23:30 UTC は JST で 2026-05-31
         let d = created_at_to_jst_date("Sat May 30 23:30:00 +0000 2026").unwrap();
         assert_eq!(d, NaiveDate::from_ymd_opt(2026, 5, 31).unwrap());
+    }
+
+    #[test]
+    fn build_query_single_vs_multiple_hashtags() {
+        assert_eq!(
+            build_query("taizooo", &["yetanotherfunkstudy".into()], "2026-05-03"),
+            "from:taizooo #yetanotherfunkstudy since:2026-05-03"
+        );
+        assert_eq!(
+            build_query(
+                "taizooo",
+                &["yetanotherfunkstudy".into(), "yetanotherbachstudy".into()],
+                "2026-05-03"
+            ),
+            "from:taizooo (#yetanotherfunkstudy OR #yetanotherbachstudy) since:2026-05-03"
+        );
     }
 
     #[test]
