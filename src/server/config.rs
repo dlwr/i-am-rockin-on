@@ -16,6 +16,24 @@ pub struct Config {
     pub funkstudy_enabled: bool,
     pub funkstudy_screen_name: String,
     pub funkstudy_backfill_days: i64,
+    /// 取り込む `#yetanother…study` 系ハッシュタグ（`#` 抜き）。 OR 検索される。
+    pub funkstudy_hashtags: Vec<String>,
+}
+
+/// `FUNKSTUDY_HASHTAGS`（カンマ区切り、`#` は任意）をパースする。 空や未設定なら
+/// 既定の funk / bach に倒す。 taizooo は時々新しい「study」タグを作るので env で足せる。
+fn parse_funkstudy_hashtags(raw: Option<String>) -> Vec<String> {
+    let parsed: Vec<String> = raw
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().trim_start_matches('#').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parsed.is_empty() {
+        vec!["yetanotherfunkstudy".into(), "yetanotherbachstudy".into()]
+    } else {
+        parsed
+    }
 }
 
 impl Config {
@@ -59,6 +77,7 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse::<i64>().ok())
                 .unwrap_or(30),
+            funkstudy_hashtags: parse_funkstudy_hashtags(std::env::var("FUNKSTUDY_HASHTAGS").ok()),
         })
     }
 }
@@ -118,10 +137,12 @@ mod tests {
         let saved_name = std::env::var("FUNKSTUDY_SCREEN_NAME").ok();
         let saved_days = std::env::var("FUNKSTUDY_BACKFILL_DAYS").ok();
         let saved_enabled = std::env::var("FUNKSTUDY_ENABLED").ok();
+        let saved_tags = std::env::var("FUNKSTUDY_HASHTAGS").ok();
         std::env::remove_var("FUNKSTUDY_API_KEY");
         std::env::remove_var("FUNKSTUDY_SCREEN_NAME");
         std::env::remove_var("FUNKSTUDY_BACKFILL_DAYS");
         std::env::remove_var("FUNKSTUDY_ENABLED");
+        std::env::remove_var("FUNKSTUDY_HASHTAGS");
         std::env::set_var("DATABASE_URL", "sqlite::memory:");
         std::env::set_var("SPOTIFY_CLIENT_ID", "x");
         std::env::set_var("SPOTIFY_CLIENT_SECRET", "y");
@@ -131,11 +152,38 @@ mod tests {
         assert_eq!(cfg.funkstudy_screen_name, "taizooo");
         assert_eq!(cfg.funkstudy_backfill_days, 30);
         assert!(cfg.funkstudy_enabled);
+        assert_eq!(
+            cfg.funkstudy_hashtags,
+            vec!["yetanotherfunkstudy".to_string(), "yetanotherbachstudy".to_string()]
+        );
 
         if let Some(v) = saved_key { std::env::set_var("FUNKSTUDY_API_KEY", v); }
         if let Some(v) = saved_name { std::env::set_var("FUNKSTUDY_SCREEN_NAME", v); }
         if let Some(v) = saved_days { std::env::set_var("FUNKSTUDY_BACKFILL_DAYS", v); }
         if let Some(v) = saved_enabled { std::env::set_var("FUNKSTUDY_ENABLED", v); }
+        if let Some(v) = saved_tags { std::env::set_var("FUNKSTUDY_HASHTAGS", v); }
         if let Some(v) = saved_db { std::env::set_var("DATABASE_URL", v); } else { std::env::remove_var("DATABASE_URL"); }
+    }
+
+    #[test]
+    fn parse_funkstudy_hashtags_handles_defaults_and_custom() {
+        // 未設定・空 → 既定 (funk + bach)
+        assert_eq!(
+            parse_funkstudy_hashtags(None),
+            vec!["yetanotherfunkstudy".to_string(), "yetanotherbachstudy".to_string()]
+        );
+        assert_eq!(
+            parse_funkstudy_hashtags(Some("  ,  ".into())),
+            vec!["yetanotherfunkstudy".to_string(), "yetanotherbachstudy".to_string()]
+        );
+        // `#` 有無・空白・空要素を正規化
+        assert_eq!(
+            parse_funkstudy_hashtags(Some("#yetanotherfunkstudy, yetanotherbachstudy ,, #yetanotherjazzstudy".into())),
+            vec![
+                "yetanotherfunkstudy".to_string(),
+                "yetanotherbachstudy".to_string(),
+                "yetanotherjazzstudy".to_string()
+            ]
+        );
     }
 }
