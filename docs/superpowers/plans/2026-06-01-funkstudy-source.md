@@ -1164,10 +1164,17 @@ git commit -m "docs(readme): funkstudy ソースと環境変数を追記"
 - **twitterapi.io 課金**: 実行には有効な `FUNKSTUDY_API_KEY` と従量課金アカウントが必要。未設定なら main は funkstudy を登録せずスキップする（他ソースは通常動作）。
 - **本体 id == conversation root の前提**: `#yetanotherfunkstudy` 本体はオリジナル投稿なので、その tweet id を replies の `tweetId` に使う。万一本体が誰かへの返信だった場合はスレッド root がずれるが、運用上発生しない想定。
 - **featured_at**: Spotify 返信の `createdAt`（JST 日付）を採用。本体投稿と同日のことがほとんど。
-- **返信ページング**: replies は 1 ページ目（最大 20 件）のみ走査する。taizooo の Spotify 返信は本体直後の自己返信なので 1 ページ目に入る。将来取りこぼしが判明したらページングを足す。
-- **スキーマ確認済み（twitterapi.io docs ベース）**: `createdAt` は classic Twitter 形式 `"Tue Dec 10 07:00:30 +0000 2024"`（パーサ `%a %b %d %H:%M:%S %z %Y` と一致）、`id` は string、`entities.urls[].expanded_url` 存在。サイレント日付バグ（ISO-8601 なら featured_at が全て「今日」になる）のリスクは解消済み。
-- **能動的スモークテスト（キー入手後・必須）**: `cargo run --features ssr --bin scrape -- --source funkstudy` を実行。「クラッシュしない」だけでは不十分 — `#[serde(default)]` だらけなので統合不整合はサイレントに空を返す。最低限:
-  1. `list_candidates` が既知のアクティブ期間で **非空** を返すこと（空なら `from:` / `since:` / ハッシュタグ検索のどれかが効いていない）。
-  2. 既知の 1 投稿が end-to-end で解決し、`recommendations` に正しい artist / album / featured_at で入ること。
-  3. **ハッシュタグ位置の前提検証**: 本実装は `#yetanotherfunkstudy` が画像本体側に付き Spotify URL は返信側にある前提（検索 root → 返信走査）。もしハッシュタグが返信側に付くなら検索と走査が逆転して 0 件になる。実データで要確認。
-  差異があれば fixture と deserialize struct を実レスポンスに合わせて修正する。
+- **返信ページング**: なし。advanced_search / replies とも 1 ページ目のみ取得（最大 20 件）。理由は下記スモーク結果参照。
+- **featured_at（実測補正）**: Spotify 返信ではなく拾えた最初の Spotify album URL を持つ返信の `createdAt` を JST 日付で採用。実測で本体と同日。
+
+### 実 API スモークテスト結果（2026-06-02 実施・PASSED）
+
+`FUNKSTUDY_BACKFILL_DAYS=60` で `scrape --source funkstudy` を実行し、taizooo の実投稿が
+**Cyndi Lauper - Memphis Blues**（`featured_at=2026-04-09`、Spotify URL・ジャケット込み）として
+`recommendations` に挿入されることを確認。検証で判明し**コード修正済み**の点（コミット `3bef35b`）:
+
+1. **replies レスポンスの top-level は `tweets`**（docs は `replies` と誤記）。alias で両対応。これが無いと常に空 → 何も解決しない**サイレント失敗**だった。
+2. **advanced_search のページング廃止**。`has_next_page` は空ページでも `true` を返す不安定値で、終端越え cursor が `429` や `tweets:null` デコード失敗を招いた。低頻度ソースなので 1 ページで 30 日窓は十分。
+3. **`429`（QPS 制限、`Retry-After` なし）に exponential backoff リトライ追加**（3/6/12s, 最大3回）。search 直後の replies が必ず 429 になるため、無いと実質動かなかった。
+4. **ハッシュタグ位置の前提は正しかった**: `#yetanotherfunkstudy` は画像本体側、Spotify URL は taizooo 自身の返信側（検索 root → 返信走査で正解）。
+5. スキーマ確認: `createdAt` は classic Twitter 形式（パーサ一致）、`id` は string、Spotify URL は返信の `entities.urls[].expanded_url`。
