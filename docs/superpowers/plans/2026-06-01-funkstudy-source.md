@@ -1165,4 +1165,9 @@ git commit -m "docs(readme): funkstudy ソースと環境変数を追記"
 - **本体 id == conversation root の前提**: `#yetanotherfunkstudy` 本体はオリジナル投稿なので、その tweet id を replies の `tweetId` に使う。万一本体が誰かへの返信だった場合はスレッド root がずれるが、運用上発生しない想定。
 - **featured_at**: Spotify 返信の `createdAt`（JST 日付）を採用。本体投稿と同日のことがほとんど。
 - **返信ページング**: replies は 1 ページ目（最大 20 件）のみ走査する。taizooo の Spotify 返信は本体直後の自己返信なので 1 ページ目に入る。将来取りこぼしが判明したらページングを足す。
-- **実 API 接続テスト**: 本プランのテストは wiremock のみ。キー入手後に `cargo run --features ssr --bin scrape -- --source funkstudy` で実 API を 1 度叩き、レスポンス JSON の field 名（`tweets`/`replies`/`createdAt`/`entities.urls[].expanded_url`/`author.userName`）が想定どおりか確認すること。差異があれば fixture と deserialize struct を実レスポンスに合わせて修正する。
+- **スキーマ確認済み（twitterapi.io docs ベース）**: `createdAt` は classic Twitter 形式 `"Tue Dec 10 07:00:30 +0000 2024"`（パーサ `%a %b %d %H:%M:%S %z %Y` と一致）、`id` は string、`entities.urls[].expanded_url` 存在。サイレント日付バグ（ISO-8601 なら featured_at が全て「今日」になる）のリスクは解消済み。
+- **能動的スモークテスト（キー入手後・必須）**: `cargo run --features ssr --bin scrape -- --source funkstudy` を実行。「クラッシュしない」だけでは不十分 — `#[serde(default)]` だらけなので統合不整合はサイレントに空を返す。最低限:
+  1. `list_candidates` が既知のアクティブ期間で **非空** を返すこと（空なら `from:` / `since:` / ハッシュタグ検索のどれかが効いていない）。
+  2. 既知の 1 投稿が end-to-end で解決し、`recommendations` に正しい artist / album / featured_at で入ること。
+  3. **ハッシュタグ位置の前提検証**: 本実装は `#yetanotherfunkstudy` が画像本体側に付き Spotify URL は返信側にある前提（検索 root → 返信走査）。もしハッシュタグが返信側に付くなら検索と走査が逆転して 0 件になる。実データで要確認。
+  差異があれば fixture と deserialize struct を実レスポンスに合わせて修正する。
