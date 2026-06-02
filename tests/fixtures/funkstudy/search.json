@@ -1,0 +1,13 @@
+{
+  "tweets": [
+    {
+      "id": "1001",
+      "url": "https://x.com/taizooo/status/1001",
+      "text": "#yetanotherfunkstudy",
+      "createdAt": "Sat May 30 12:00:00 +0000 2026",
+      "author": { "userName": "taizooo" }
+    }
+  ],
+  "has_next_page": false,
+  "next_cursor": ""
+}

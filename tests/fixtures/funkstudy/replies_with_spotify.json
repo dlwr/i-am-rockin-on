@@ -1,0 +1,24 @@
+{
+  "replies": [
+    {
+      "id": "1002",
+      "url": "https://x.com/taizooo/status/1002",
+      "text": "https://t.co/short",
+      "createdAt": "Sat May 30 12:01:00 +0000 2026",
+      "author": { "userName": "taizooo" },
+      "entities": {
+        "urls": [
+          { "expanded_url": "https://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy?si=abc" }
+        ]
+      }
+    },
+    {
+      "id": "1003",
+      "text": "https://open.spotify.com/album/SHOULDNOTWIN",
+      "createdAt": "Sat May 30 12:02:00 +0000 2026",
+      "author": { "userName": "someone_else" }
+    }
+  ],
+  "has_next_page": false,
+  "next_cursor": ""
+}
