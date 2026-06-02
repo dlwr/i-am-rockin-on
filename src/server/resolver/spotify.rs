@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 const SEARCH_URL: &str = "https://api.spotify.com/v1/search";
+const ALBUMS_URL: &str = "https://api.spotify.com/v1/albums";
 
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
@@ -21,6 +22,7 @@ pub struct SpotifyResolver {
     http: Client,
     token_url: String,
     search_url: String,
+    albums_url: String,
     token: Mutex<Option<(String, Instant)>>,
 }
 
@@ -35,6 +37,7 @@ impl SpotifyResolver {
                 .unwrap(),
             token_url: TOKEN_URL.into(),
             search_url: SEARCH_URL.into(),
+            albums_url: ALBUMS_URL.into(),
             token: Mutex::new(None),
         }
     }
@@ -42,6 +45,11 @@ impl SpotifyResolver {
     pub fn with_endpoints(mut self, token_url: String, search_url: String) -> Self {
         self.token_url = token_url;
         self.search_url = search_url;
+        self
+    }
+
+    pub fn with_albums_url(mut self, albums_url: String) -> Self {
+        self.albums_url = albums_url;
         self
     }
 
@@ -97,6 +105,34 @@ impl SpotifyResolver {
             track_name: None,
         }))
     }
+
+    /// album id から `GET /v1/albums/{id}` でメタデータを取得する。
+    /// 404 は「配信停止/不正 id」とみなして None。
+    pub async fn resolve_by_album_id(&self, album_id: &str) -> AppResult<Option<SpotifyAlbumMeta>> {
+        let token = self.access_token().await?;
+        let resp = self
+            .http
+            .get(format!("{}/{}", self.albums_url, album_id))
+            .bearer_auth(&token)
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let album: AlbumResp = resp.error_for_status()?.json().await?;
+        let artist_name = album
+            .artists
+            .into_iter()
+            .next()
+            .map(|a| a.name)
+            .unwrap_or_default();
+        Ok(Some(SpotifyAlbumMeta {
+            url: album.external_urls.spotify,
+            image_url: album.images.into_iter().next().map(|i| i.url),
+            artist_name,
+            album_name: album.name,
+        }))
+    }
 }
 
 /// Spotify search query の field filter（`artist:"…"` / `album:"…"`）の値から
@@ -121,6 +157,14 @@ pub struct SpotifyMatch {
     pub track_name: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpotifyAlbumMeta {
+    pub url: String,
+    pub image_url: Option<String>,
+    pub artist_name: String,
+    pub album_name: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct AlbumsResp { albums: AlbumPage }
 #[derive(Debug, Deserialize)]
@@ -134,6 +178,18 @@ struct AlbumItem {
 struct ExternalUrls { spotify: String }
 #[derive(Debug, Deserialize)]
 struct Image { url: String }
+
+#[derive(Debug, Deserialize)]
+struct AlbumResp {
+    name: String,
+    artists: Vec<ArtistRef>,
+    images: Vec<Image>,
+    external_urls: ExternalUrls,
+}
+#[derive(Debug, Deserialize)]
+struct ArtistRef {
+    name: String,
+}
 
 #[cfg(test)]
 mod tests {
@@ -307,6 +363,59 @@ mod tests {
         );
         let m = r.resolve("Nope", Some("Nope")).await.unwrap();
         assert!(m.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_by_album_id_returns_meta() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "tok", "token_type": "Bearer", "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/albums/abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "Some Album",
+                "artists": [{ "name": "Some Artist" }],
+                "images": [{ "url": "https://i.scdn.co/image/x.jpg" }],
+                "external_urls": { "spotify": "https://open.spotify.com/album/abc123" }
+            })))
+            .mount(&server)
+            .await;
+
+        let r = SpotifyResolver::new("id".into(), "sec".into())
+            .with_endpoints(format!("{}/token", server.uri()), format!("{}/search", server.uri()))
+            .with_albums_url(format!("{}/albums", server.uri()));
+        let m = r.resolve_by_album_id("abc123").await.unwrap().unwrap();
+        assert_eq!(m.artist_name, "Some Artist");
+        assert_eq!(m.album_name, "Some Album");
+        assert_eq!(m.url, "https://open.spotify.com/album/abc123");
+        assert_eq!(m.image_url.unwrap(), "https://i.scdn.co/image/x.jpg");
+    }
+
+    #[tokio::test]
+    async fn resolve_by_album_id_returns_none_on_404() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "tok", "token_type": "Bearer", "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/albums/missing"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let r = SpotifyResolver::new("id".into(), "sec".into())
+            .with_endpoints(format!("{}/token", server.uri()), format!("{}/search", server.uri()))
+            .with_albums_url(format!("{}/albums", server.uri()));
+        assert!(r.resolve_by_album_id("missing").await.unwrap().is_none());
     }
 
     #[test]
