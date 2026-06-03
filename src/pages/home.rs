@@ -12,8 +12,9 @@ fn image_alt(artist: &str, album: Option<&str>) -> String {
 /// `source_id` を表示用ラベルに写像する。未知の id はそのまま返す。
 fn source_label(source_id: &str) -> &str {
     match source_id {
-        "rokinon" => "ロキノン",
+        "rokinon" => "ロキノンには騙されないぞ",
         "pitchfork" => "Pitchfork",
+        "funkstudy" => "yetanother(funk|bach)study",
         other => other,
     }
 }
@@ -44,8 +45,9 @@ mod tests {
 
     #[test]
     fn source_label_known_ids() {
-        assert_eq!(source_label("rokinon"), "ロキノン");
+        assert_eq!(source_label("rokinon"), "ロキノンには騙されないぞ");
         assert_eq!(source_label("pitchfork"), "Pitchfork");
+        assert_eq!(source_label("funkstudy"), "yetanother(funk|bach)study");
     }
 
     #[test]
