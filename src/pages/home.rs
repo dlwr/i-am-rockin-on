@@ -127,14 +127,18 @@ pub async fn list_albums() -> Result<Vec<AlbumCardView>, ServerFnError> {
 #[server(Selector, "/api")]
 pub async fn selector() -> Result<Option<SelectorCardView>, ServerFnError> {
     use crate::server::store::RecommendationRepo;
-    use chrono::{Duration, Utc};
+    use chrono::{Months, Utc};
     use std::sync::Arc;
 
     let repo = use_context::<Arc<RecommendationRepo>>()
         .ok_or_else(|| ServerFnError::new("repo missing"))?;
-    let since = Utc::now() - Duration::days(30);
+    // 直近 1 ヶ月に featured (記事公開) されたアルバムを対象にする。
+    let since = Utc::now()
+        .date_naive()
+        .checked_sub_months(Months::new(1))
+        .expect("1ヶ月前は常に有効な日付");
     let picked = repo
-        .pick_recent_addition(since)
+        .pick_recent_feature(since)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     Ok(picked.map(SelectorCardView::from))
