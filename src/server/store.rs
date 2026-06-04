@@ -158,6 +158,10 @@ impl RecommendationRepo {
         // 注意: `keyed` CTE の dedup_key 正規化は `list_recent_albums` と同一。
         // sqlx::query! マクロのため CTE 自体は共有化できないが、 仕様変更時は
         // 両方を同時に更新する。
+        // カード表示は head.featured_at に移ったため SELECT の `MIN(created_at) AS added_at`
+        // 列は Rust 側で未使用になったが、敢えて残している: ここを消すとクエリ文字列が
+        // 変わり `.sqlx` オフラインキャッシュ（SQLX_OFFLINE ビルド）が無効化されデプロイが
+        // 落ちる。「最近追加」絞り込み自体は下の HAVING MIN(created_at) が担う。
         let row = sqlx::query!(
             r#"WITH keyed AS (
                 SELECT
@@ -210,7 +214,7 @@ impl RecommendationRepo {
             spotify_url: raw.iter().find_map(|r| r.spotify_url.clone()),
             spotify_image_url: raw.iter().find_map(|r| r.spotify_image_url.clone()),
             youtube_url: raw.iter().find_map(|r| r.youtube_url.clone()),
-            added_at: row.added_at,
+            featured_at: head.featured_at,
             sources: raw.iter().map(|r| SourceLink {
                 source_id: r.source_id.clone(),
                 source_url: r.source_url.clone(),

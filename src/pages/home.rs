@@ -57,8 +57,8 @@ mod tests {
 
     #[cfg(feature = "ssr")]
     #[test]
-    fn selector_card_view_from_domain_formats_added_at_as_yyyy_mm_dd() {
-        use chrono::{TimeZone, Utc};
+    fn selector_card_view_from_domain_formats_featured_at_as_yyyy_mm_dd() {
+        use chrono::NaiveDate;
         use crate::domain::selector_card::SelectorCard;
 
         let card = SelectorCard {
@@ -67,19 +67,19 @@ mod tests {
             spotify_url: Some("https://open.spotify.com/album/abc".into()),
             spotify_image_url: None,
             youtube_url: None,
-            added_at: Utc.with_ymd_and_hms(2026, 5, 10, 12, 0, 0).unwrap(),
+            featured_at: NaiveDate::from_ymd_opt(2026, 2, 12).unwrap(),
             sources: vec![],
         };
         let view = SelectorCardView::from(card);
         assert_eq!(view.artist_name, "Aldous Harding");
         assert_eq!(view.album_name.as_deref(), Some("Train on the Island"));
-        assert_eq!(view.added_at, "2026-05-10");
+        assert_eq!(view.featured_at, "2026-02-12");
     }
 
     #[cfg(feature = "ssr")]
     #[test]
     fn selector_card_view_from_domain_carries_sources() {
-        use chrono::{NaiveDate, TimeZone, Utc};
+        use chrono::NaiveDate;
         use crate::domain::album_card::SourceLink;
         use crate::domain::selector_card::SelectorCard;
 
@@ -89,7 +89,7 @@ mod tests {
             spotify_url: None,
             spotify_image_url: None,
             youtube_url: None,
-            added_at: Utc.with_ymd_and_hms(2026, 5, 10, 12, 0, 0).unwrap(),
+            featured_at: NaiveDate::from_ymd_opt(2026, 5, 10).unwrap(),
             sources: vec![
                 SourceLink {
                     source_id: "pitchfork".into(),
@@ -186,7 +186,7 @@ pub struct SelectorCardView {
     pub spotify_url: Option<String>,
     pub spotify_image_url: Option<String>,
     pub youtube_url: Option<String>,
-    pub added_at: String, // YYYY-MM-DD
+    pub featured_at: String, // YYYY-MM-DD
     pub sources: Vec<SourceLinkView>,
 }
 
@@ -199,7 +199,7 @@ impl From<crate::domain::selector_card::SelectorCard> for SelectorCardView {
             spotify_url: c.spotify_url,
             spotify_image_url: c.spotify_image_url,
             youtube_url: c.youtube_url,
-            added_at: c.added_at.format("%Y-%m-%d").to_string(),
+            featured_at: c.featured_at.format("%Y-%m-%d").to_string(),
             sources: c
                 .sources
                 .into_iter()
@@ -334,7 +334,7 @@ fn SelectorPick(card: SelectorCardView) -> impl IntoView {
                     >"YouTube"</a>
                 })}
                 <SourceMenu sources=card.sources.clone()/>
-                <span class="ml-auto text-[0.7rem] text-sepia">{card.added_at.clone()}</span>
+                <span class="ml-auto text-[0.7rem] text-sepia">{card.featured_at.clone()}</span>
             </div>
         </article>
     }
