@@ -12,6 +12,8 @@ CI 側で sqlx-cli cache が `sqlx` だけ保存して `cargo-sqlx` が抜けて
 
 同日 2026-05-17 に mobile (375px 想定) で SourceMenu の dropdown が (a) 画面外にはみ出る (b) sibling card の下に潜る、 の 2 問題を修正 (PR #34)。 root cause は (a) `<details>` 基準の `right-0` anchor で flex-wrap 折り返し時に viewport を越える、 (b) `.tilt-cycle` の transform で各 card が独自 stacking context を作るので dropdown の `z-10` が DOM 順で負ける、 の 2 つ。 修正は card に `relative` を付けて dropdown の containing block を card に揃え、 `has-[details[open]]:z-20` で開いている card の stacking を持ち上げ、 mobile の `min-w` を 8rem に下げて 320px 幅も担保。 Playwright で Aldous を multi-source + youtube_url にする seed と `boundingBox` / `elementsFromPoint` 検証を追加 (red→green 確認済み)。
 
+2026-06-05 に Selector を created_at ベースから featured_at ベースへ移行 (PR #48)。 発端は「2月公開の European Sun が Selector で 2026-06-01 と表示される」報告。 調査の結果これは bug ではなく、 カードが `MIN(created_at)`（うちが拾った日）を表示していたためで、 featured_at 自体は 2/12 で正しかった（created_at が偶然 6/1）。 対応は 2 つ: (1) 表示を `head.featured_at`（記事公開日のうち最新）に変えてホームのグリッドと揃えた、 (2) 絞り込みも `MIN(created_at) >= now-30d` → `MAX(featured_at) >= 今日-1ヶ月` に変更（dedup group は最新 feature が窓内なら含む向きに反転）。 実態と合わなくなった `pick_recent_addition` を `pick_recent_feature` にリネーム。 SQL を変えたので `.sqlx` を CI 固定の sqlx-cli ^0.8（ローカルは 0.9 だったので 0.8.6 を入れ直し）で再生成し、 差分は当該クエリ 1 件のみ・`cargo sqlx prepare --check` で確認。 視覚テストの `tests/visual/seed.sql` は固定日付 (2026-05-01〜) のままだと新フィルタで全行が窓外に落ち「記事」 affordance テスト (home.spec.ts:50) が空ピックで fail したため、 featured_at を `date('now','-N days')` の相対日付（最古でも -23 日）に変更（固定日付の aging flake も同時に解消）。 本番デプロイ後、 villagerrr「Carousel」(featured_at=2026-06-01) が Selector に出ること・European Sun が窓外で除外されることを実機確認。 副作用: featured_at が 1 ヶ月より古いアルバムは Selector に出なくなる。 教訓: ①「表示が変」報告はまず表示元フィールドの取り違え（featured_at vs created_at）を疑う ②SQL を変えたら `.sqlx` 再生成必須、 生成は CI 固定バージョンの sqlx-cli で（version drift だと全 12 ファイル churn する） ③相対日付に依存するロジックのテスト seed は固定日付でなく `date('now')` 相対にする（さもないと実行日が進むと窓外で flake）。
+
 ### 低優先度
 
 - [ ] **ローカル macOS で `cargo leptos build` が失敗**
@@ -27,7 +29,7 @@ CI 側で sqlx-cli cache が `sqlx` だけ保存して `cargo-sqlx` が抜けて
 ### 気づき・注意点（実装ノート）
 
 - **`tests/visual/home.spec.ts` は pixel-diff スナップショットではない**。 grid-template-columns のトークン数と要素 count + aspect-ratio で layout を verify している。 UI 追加で header 部の DOM が増えても、 grid 兄弟要素が増えない限り既存テストはそのまま通る
-- **CTE 共有不可**: `pick_recent_addition` と `list_recent_albums` の `keyed` CTE は同じ dedup_key 正規化を持つが、 `sqlx::query!` マクロのため Rust 側で共有化できない。 双方にコメントを置いてある (同期注意)
+- **CTE 共有不可**: `pick_recent_feature`（旧 `pick_recent_addition`）と `list_recent_albums` の `keyed` CTE は同じ dedup_key 正規化を持つが、 `sqlx::query!` マクロのため Rust 側で共有化できない。 双方にコメントを置いてある (同期注意)
 - **コンポーネント名と domain 型の衝突**: `SelectorCard` は domain 型 (`crate::domain::selector_card`) でも使うため、 Leptos コンポーネント側は `SelectorPick` に分離した。 似た構図が来たら最初から component 側を別名で切るのが正解
 - **CI cache の罠**: 「`cargo cmd` で使う subcommand binary は `cargo-cmd` だけど、 cache path に `cmd` だけ書いてた」 という事故。 cargo の subcommand resolution を意識した cache 設計が必要
 
