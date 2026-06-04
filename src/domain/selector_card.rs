@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 pub use crate::domain::album_card::SourceLink;
@@ -10,8 +10,8 @@ pub struct SelectorCard {
     pub spotify_url: Option<String>,
     pub spotify_image_url: Option<String>,
     pub youtube_url: Option<String>,
-    /// dedup group の MIN(created_at)。 「うちが最初に拾った日」。
-    pub added_at: DateTime<Utc>,
+    /// dedup group の MAX(featured_at)。 AlbumCard と同じく「記事の実公開日」のうち最新。
+    pub featured_at: NaiveDate,
     /// dedup group 内のソース一覧。 AlbumCard と同様 `featured_at DESC, source_id ASC` で並ぶ。
     pub sources: Vec<SourceLink>,
 }
@@ -23,14 +23,13 @@ mod tests {
 
     #[test]
     fn selector_card_holds_optional_fields_independently() {
-        let now = Utc::now();
         let card = SelectorCard {
             artist_name: "Aldous Harding".into(),
             album_name: Some("Train on the Island".into()),
             spotify_url: Some("https://open.spotify.com/album/abc".into()),
             spotify_image_url: None,
             youtube_url: None,
-            added_at: now,
+            featured_at: NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
             sources: vec![],
         };
         assert_eq!(card.artist_name, "Aldous Harding");
@@ -45,7 +44,7 @@ mod tests {
             spotify_url: None,
             spotify_image_url: None,
             youtube_url: None,
-            added_at: Utc::now(),
+            featured_at: NaiveDate::from_ymd_opt(2026, 5, 8).unwrap(),
             sources: vec![
                 SourceLink {
                     source_id: "pitchfork".into(),

@@ -57,8 +57,8 @@ mod tests {
 
     #[cfg(feature = "ssr")]
     #[test]
-    fn selector_card_view_from_domain_formats_added_at_as_yyyy_mm_dd() {
-        use chrono::{TimeZone, Utc};
+    fn selector_card_view_from_domain_formats_featured_at_as_yyyy_mm_dd() {
+        use chrono::NaiveDate;
         use crate::domain::selector_card::SelectorCard;
 
         let card = SelectorCard {
@@ -67,19 +67,19 @@ mod tests {
             spotify_url: Some("https://open.spotify.com/album/abc".into()),
             spotify_image_url: None,
             youtube_url: None,
-            added_at: Utc.with_ymd_and_hms(2026, 5, 10, 12, 0, 0).unwrap(),
+            featured_at: NaiveDate::from_ymd_opt(2026, 2, 12).unwrap(),
             sources: vec![],
         };
         let view = SelectorCardView::from(card);
         assert_eq!(view.artist_name, "Aldous Harding");
         assert_eq!(view.album_name.as_deref(), Some("Train on the Island"));
-        assert_eq!(view.added_at, "2026-05-10");
+        assert_eq!(view.featured_at, "2026-02-12");
     }
 
     #[cfg(feature = "ssr")]
     #[test]
     fn selector_card_view_from_domain_carries_sources() {
-        use chrono::{NaiveDate, TimeZone, Utc};
+        use chrono::NaiveDate;
         use crate::domain::album_card::SourceLink;
         use crate::domain::selector_card::SelectorCard;
 
@@ -89,7 +89,7 @@ mod tests {
             spotify_url: None,
             spotify_image_url: None,
             youtube_url: None,
-            added_at: Utc.with_ymd_and_hms(2026, 5, 10, 12, 0, 0).unwrap(),
+            featured_at: NaiveDate::from_ymd_opt(2026, 5, 10).unwrap(),
             sources: vec![
                 SourceLink {
                     source_id: "pitchfork".into(),
@@ -127,14 +127,18 @@ pub async fn list_albums() -> Result<Vec<AlbumCardView>, ServerFnError> {
 #[server(Selector, "/api")]
 pub async fn selector() -> Result<Option<SelectorCardView>, ServerFnError> {
     use crate::server::store::RecommendationRepo;
-    use chrono::{Duration, Utc};
+    use chrono::{Months, Utc};
     use std::sync::Arc;
 
     let repo = use_context::<Arc<RecommendationRepo>>()
         .ok_or_else(|| ServerFnError::new("repo missing"))?;
-    let since = Utc::now() - Duration::days(30);
+    // 直近 1 ヶ月に featured (記事公開) されたアルバムを対象にする。
+    let since = Utc::now()
+        .date_naive()
+        .checked_sub_months(Months::new(1))
+        .expect("1ヶ月前は常に有効な日付");
     let picked = repo
-        .pick_recent_addition(since)
+        .pick_recent_feature(since)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     Ok(picked.map(SelectorCardView::from))
@@ -186,7 +190,7 @@ pub struct SelectorCardView {
     pub spotify_url: Option<String>,
     pub spotify_image_url: Option<String>,
     pub youtube_url: Option<String>,
-    pub added_at: String, // YYYY-MM-DD
+    pub featured_at: String, // YYYY-MM-DD
     pub sources: Vec<SourceLinkView>,
 }
 
@@ -199,7 +203,7 @@ impl From<crate::domain::selector_card::SelectorCard> for SelectorCardView {
             spotify_url: c.spotify_url,
             spotify_image_url: c.spotify_image_url,
             youtube_url: c.youtube_url,
-            added_at: c.added_at.format("%Y-%m-%d").to_string(),
+            featured_at: c.featured_at.format("%Y-%m-%d").to_string(),
             sources: c
                 .sources
                 .into_iter()
@@ -334,7 +338,7 @@ fn SelectorPick(card: SelectorCardView) -> impl IntoView {
                     >"YouTube"</a>
                 })}
                 <SourceMenu sources=card.sources.clone()/>
-                <span class="ml-auto text-[0.7rem] text-sepia">{card.added_at.clone()}</span>
+                <span class="ml-auto text-[0.7rem] text-sepia">{card.featured_at.clone()}</span>
             </div>
         </article>
     }

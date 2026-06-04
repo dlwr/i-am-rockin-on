@@ -135,9 +135,11 @@ impl RecommendationRepo {
         Ok(())
     }
 
-    pub async fn pick_recent_addition(
+    /// Selector 用: dedup group 単位で MAX(featured_at) が `since` 以降
+    /// （= 直近に公開された）アルバムからランダムに 1 件返す。
+    pub async fn pick_recent_feature(
         &self,
-        since: chrono::DateTime<chrono::Utc>,
+        since: chrono::NaiveDate,
     ) -> AppResult<Option<crate::domain::selector_card::SelectorCard>> {
         use crate::domain::album_card::SourceLink;
         use crate::domain::selector_card::SelectorCard;
@@ -172,13 +174,11 @@ impl RecommendationRepo {
                     spotify_url,
                     spotify_image_url,
                     youtube_url,
-                    featured_at,
-                    created_at
+                    featured_at
                 FROM recommendations
             )
             SELECT
                 dedup_key AS "dedup_key!: String",
-                MIN(created_at) AS "added_at!: chrono::DateTime<chrono::Utc>",
                 json_group_array(json_object(
                     'source_id', source_id,
                     'source_url', source_url,
@@ -191,7 +191,7 @@ impl RecommendationRepo {
                 )) AS "rows_json!: String"
             FROM keyed
             GROUP BY dedup_key
-            HAVING MIN(created_at) >= ?
+            HAVING MAX(featured_at) >= ?
             ORDER BY RANDOM()
             LIMIT 1"#,
             since,
@@ -210,7 +210,7 @@ impl RecommendationRepo {
             spotify_url: raw.iter().find_map(|r| r.spotify_url.clone()),
             spotify_image_url: raw.iter().find_map(|r| r.spotify_image_url.clone()),
             youtube_url: raw.iter().find_map(|r| r.youtube_url.clone()),
-            added_at: row.added_at,
+            featured_at: head.featured_at,
             sources: raw.iter().map(|r| SourceLink {
                 source_id: r.source_id.clone(),
                 source_url: r.source_url.clone(),
@@ -235,7 +235,7 @@ impl RecommendationRepo {
             featured_at: chrono::NaiveDate,
         }
 
-        // 注意: `keyed` CTE の dedup_key 正規化は `pick_recent_addition` と同一。
+        // 注意: `keyed` CTE の dedup_key 正規化は `pick_recent_feature` と同一。
         // sqlx::query! マクロのため CTE 自体は共有化できないが、 仕様変更時は
         // 両方を同時に更新する。
         let rows = sqlx::query!(
@@ -532,99 +532,86 @@ mod tests {
         ]);
     }
 
-    async fn set_created_at(pool: &SqlitePool, id: i64, created_at: chrono::DateTime<chrono::Utc>) {
-        sqlx::query("UPDATE recommendations SET created_at = ? WHERE id = ?")
-            .bind(created_at)
-            .bind(id)
-            .execute(pool)
-            .await
-            .unwrap();
-    }
-
     #[tokio::test]
-    async fn pick_recent_addition_returns_single_in_window_row() {
+    async fn pick_recent_feature_returns_album_featured_within_window() {
         use chrono::{Duration, Utc};
         let pool = setup_pool().await;
         let repo = RecommendationRepo::new(pool.clone());
-        let (saved, _) = repo.upsert(sample_with(
+        let today = Utc::now().date_naive();
+        repo.upsert(sample_with(
             "rokinon", "a", "Aldous Harding", Some("Train on the Island"),
             Some("https://open.spotify.com/album/A"),
-            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+            today - Duration::days(5),
         )).await.unwrap();
-        set_created_at(&pool, saved.id, Utc::now() - Duration::days(5)).await;
 
-        let since = Utc::now() - Duration::days(30);
-        let card = repo.pick_recent_addition(since).await.unwrap().unwrap();
+        let since = today - Duration::days(30);
+        let card = repo.pick_recent_feature(since).await.unwrap().unwrap();
         assert_eq!(card.artist_name, "Aldous Harding");
         assert_eq!(card.album_name.as_deref(), Some("Train on the Island"));
     }
 
     #[tokio::test]
-    async fn pick_recent_addition_excludes_rows_older_than_window() {
+    async fn pick_recent_feature_excludes_album_featured_before_window() {
         use chrono::{Duration, Utc};
         let pool = setup_pool().await;
         let repo = RecommendationRepo::new(pool.clone());
-        let (saved, _) = repo.upsert(sample_with(
+        let today = Utc::now().date_naive();
+        // window 外 (100 日前に公開) に置く
+        repo.upsert(sample_with(
             "rokinon", "a", "Aldous Harding", Some("Train on the Island"),
             Some("https://open.spotify.com/album/A"),
-            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+            today - Duration::days(100),
         )).await.unwrap();
-        // window 外 (100 日前) に置く
-        set_created_at(&pool, saved.id, Utc::now() - Duration::days(100)).await;
 
-        let since = Utc::now() - Duration::days(30);
-        assert!(repo.pick_recent_addition(since).await.unwrap().is_none());
+        let since = today - Duration::days(30);
+        assert!(repo.pick_recent_feature(since).await.unwrap().is_none());
     }
 
     #[tokio::test]
-    async fn pick_recent_addition_excludes_dedup_group_when_oldest_row_is_outside_window() {
+    async fn pick_recent_feature_includes_group_when_newest_feature_in_window() {
         use chrono::{Duration, Utc};
         let pool = setup_pool().await;
         let repo = RecommendationRepo::new(pool.clone());
+        let today = Utc::now().date_naive();
         let url = "https://open.spotify.com/album/shared";
 
-        // 同 dedup_key (同じ spotify_url) の 2 行。 古い方が window 外、 新しい方が window 内
-        let (old_row, _) = repo.upsert(sample_with(
+        // 同 dedup_key (同じ spotify_url) の 2 行。 古い feature は window 外、 新しい feature は window 内
+        repo.upsert(sample_with(
             "rokinon", "old", "Foo", Some("Bar"),
             Some(url),
-            NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+            today - Duration::days(100),
         )).await.unwrap();
-        set_created_at(&pool, old_row.id, Utc::now() - Duration::days(100)).await;
-
-        let (new_row, _) = repo.upsert(sample_with(
+        repo.upsert(sample_with(
             "pitchfork", "new", "Foo", Some("Bar"),
             Some(url),
-            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+            today - Duration::days(5),
         )).await.unwrap();
-        set_created_at(&pool, new_row.id, Utc::now() - Duration::days(5)).await;
 
-        let since = Utc::now() - Duration::days(30);
-        // group の MIN(created_at) = -100 日 で window 外 → 除外
-        assert!(repo.pick_recent_addition(since).await.unwrap().is_none(),
-            "group の MIN で判定するため、 新しい sibling があっても拾われない");
+        let since = today - Duration::days(30);
+        // group の MAX(featured_at) が window 内なので、 古い sibling があっても拾われる
+        let card = repo.pick_recent_feature(since).await.unwrap().unwrap();
+        assert_eq!(card.artist_name, "Foo");
     }
 
     #[tokio::test]
-    async fn pick_recent_addition_returns_sources_ordered_by_featured_at_desc() {
+    async fn pick_recent_feature_returns_sources_ordered_by_featured_at_desc() {
         use chrono::{Duration, Utc};
         let pool = setup_pool().await;
         let repo = RecommendationRepo::new(pool.clone());
+        let today = Utc::now().date_naive();
         let url = "https://open.spotify.com/album/with-sources";
 
-        let (older, _) = repo.upsert(sample_with(
+        repo.upsert(sample_with(
             "rokinon", "r1", "Foo", Some("Bar"),
-            Some(url), NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+            Some(url), today - Duration::days(20),
         )).await.unwrap();
-        set_created_at(&pool, older.id, Utc::now() - Duration::days(20)).await;
-
-        let (newer, _) = repo.upsert(sample_with(
+        repo.upsert(sample_with(
             "pitchfork", "p1", "Foo", Some("Bar"),
-            Some(url), NaiveDate::from_ymd_opt(2026, 5, 8).unwrap(),
+            Some(url), today - Duration::days(5),
         )).await.unwrap();
-        set_created_at(&pool, newer.id, Utc::now() - Duration::days(5)).await;
 
-        let since = Utc::now() - Duration::days(30);
-        let card = repo.pick_recent_addition(since).await.unwrap().unwrap();
+        let since = today - Duration::days(30);
+        let card = repo.pick_recent_feature(since).await.unwrap().unwrap();
 
         assert_eq!(card.sources.len(), 2, "merge した dedup group のソース全部を載せる");
         assert_eq!(card.sources[0].source_id, "pitchfork", "featured_at の新しい順");
@@ -684,33 +671,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pick_recent_addition_coalesces_optional_fields_across_sources_in_same_group() {
+    async fn pick_recent_feature_coalesces_optional_fields_across_sources_in_same_group() {
         use chrono::{Duration, Utc};
         let pool = setup_pool().await;
         let repo = RecommendationRepo::new(pool.clone());
+        let today = Utc::now().date_naive();
         let url = "https://open.spotify.com/album/coalesced";
 
-        // 古い row (featured_at が古い) が youtube_url を持ち、 新しい row は None
+        // 古い feature (featured_at が古い) の row が youtube_url を持ち、 新しい feature の row は None
         let mut older = sample_with(
             "rokinon", "r1", "Foo", Some("Bar"),
             Some(url),
-            NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+            today - Duration::days(20),
         );
         older.youtube_url = Some("https://youtu.be/old".into());
-        let (older_row, _) = repo.upsert(older).await.unwrap();
-        set_created_at(&pool, older_row.id, Utc::now() - Duration::days(20)).await;
+        repo.upsert(older).await.unwrap();
 
         let mut newer = sample_with(
             "pitchfork", "p1", "Foo", Some("Bar"),
             Some(url),
-            NaiveDate::from_ymd_opt(2026, 5, 8).unwrap(),
+            today - Duration::days(5),
         );
         newer.youtube_url = None;
-        let (newer_row, _) = repo.upsert(newer).await.unwrap();
-        set_created_at(&pool, newer_row.id, Utc::now() - Duration::days(5)).await;
+        repo.upsert(newer).await.unwrap();
 
-        let since = Utc::now() - Duration::days(30);
-        let card = repo.pick_recent_addition(since).await.unwrap().unwrap();
+        let since = today - Duration::days(30);
+        let card = repo.pick_recent_feature(since).await.unwrap().unwrap();
 
         // head は featured_at の新しい方 (pitchfork = newer) なのでアーティスト名はそこから
         assert_eq!(card.artist_name, "Foo");
