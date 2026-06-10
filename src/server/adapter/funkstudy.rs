@@ -46,6 +46,7 @@ impl FunkstudyAdapter {
             hashtags: vec![
                 "yetanotherfunkstudy".into(),
                 "yetanotherbachstudy".into(),
+                "FUNKStudy".into(),
             ],
             retry_base: Duration::from_secs(3),
             max_retries: 3,
@@ -105,6 +106,17 @@ impl FunkstudyAdapter {
             return Ok(resp.error_for_status()?.json::<T>().await?);
         }
     }
+}
+
+/// `text` に `#<tag>` が含まれる最初の設定タグを、 設定側の正準表記で返す。
+/// `#` アンカー + case-insensitive 一致。 `#` を前置することで `#funkstudy` が
+/// `#yetanotherfunkstudy` に誤マッチしない（直前が `#` でないと一致しないため）。
+fn match_configured_hashtag(text: &str, configured: &[String]) -> Option<String> {
+    let lower = text.to_lowercase();
+    configured
+        .iter()
+        .find(|tag| lower.contains(&format!("#{}", tag.to_lowercase())))
+        .cloned()
 }
 
 /// twitterapi.io advanced_search のクエリを組む。 ハッシュタグが複数なら
@@ -216,9 +228,11 @@ impl MediaSource for FunkstudyAdapter {
             } else {
                 t.url
             };
+            let source_id_override = match_configured_hashtag(&t.text, &self.hashtags);
             out.push(CandidateRef {
                 source_external_id: t.id,
                 source_url,
+                source_id_override,
             });
         }
         // 満杯ページ = 取りこぼしの可能性。 has_next_page は当てにならないので件数で判定し、
@@ -266,7 +280,10 @@ impl MediaSource for FunkstudyAdapter {
                 let featured_at = created_at_to_jst_date(&reply.created_at)
                     .unwrap_or_else(|| (Utc::now() + chrono::Duration::hours(9)).date_naive());
                 return Ok(Some(NewRecommendation {
-                    source_id: "funkstudy".into(),
+                    source_id: candidate
+                        .source_id_override
+                        .clone()
+                        .unwrap_or_else(|| "funkstudy".to_string()),
                     source_url: candidate.source_url.clone(),
                     source_external_id: candidate.source_external_id.clone(),
                     featured_at,
@@ -322,6 +339,18 @@ mod tests {
             ),
             "from:taizooo (#yetanotherfunkstudy OR #yetanotherbachstudy) since:2026-05-03"
         );
+        assert_eq!(
+            build_query(
+                "taizooo",
+                &[
+                    "yetanotherfunkstudy".into(),
+                    "yetanotherbachstudy".into(),
+                    "FUNKStudy".into()
+                ],
+                "2026-05-03"
+            ),
+            "from:taizooo (#yetanotherfunkstudy OR #yetanotherbachstudy OR #FUNKStudy) since:2026-05-03"
+        );
     }
 
     #[test]
@@ -355,6 +384,11 @@ mod tests {
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].source_external_id, "1001");
         assert_eq!(cands[0].source_url, "https://x.com/taizooo/status/1001");
+        assert_eq!(
+            cands[0].source_id_override.as_deref(),
+            Some("yetanotherfunkstudy"),
+            "search.json の text '#yetanotherfunkstudy' から検出して載せる"
+        );
     }
 
     #[tokio::test]
@@ -373,6 +407,7 @@ mod tests {
         let cand = CandidateRef {
             source_external_id: "1001".into(),
             source_url: "https://x.com/taizooo/status/1001".into(),
+            source_id_override: None,
         };
         let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
         assert_eq!(
@@ -402,6 +437,7 @@ mod tests {
         let cand = CandidateRef {
             source_external_id: "2042213253716341074".into(),
             source_url: "https://x.com/taizooo/status/2042213253716341074".into(),
+            source_id_override: None,
         };
         let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
         assert_eq!(
@@ -438,6 +474,7 @@ mod tests {
         let cand = CandidateRef {
             source_external_id: "2042213253716341074".into(),
             source_url: "https://x.com/taizooo/status/2042213253716341074".into(),
+            source_id_override: None,
         };
         let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
         assert_eq!(
@@ -462,8 +499,94 @@ mod tests {
         let cand = CandidateRef {
             source_external_id: "1001".into(),
             source_url: "https://x.com/taizooo/status/1001".into(),
+            source_id_override: None,
         };
         let err = adapter.fetch_and_extract(&cand).await.unwrap_err();
         assert!(matches!(err, AppError::Retryable(_)));
+    }
+
+    #[tokio::test]
+    async fn fetch_and_extract_uses_source_id_override_for_source_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/twitter/tweet/replies"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(fixture("replies_with_spotify.json")),
+            )
+            .mount(&server)
+            .await;
+
+        let adapter = FunkstudyAdapter::new("key".into(), "taizooo".into(), 30)
+            .with_base_url(server.uri());
+        let cand = CandidateRef {
+            source_external_id: "1001".into(),
+            source_url: "https://x.com/taizooo/status/1001".into(),
+            source_id_override: Some("yetanotherbachstudy".into()),
+        };
+        let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
+        assert_eq!(rec.source_id, "yetanotherbachstudy");
+    }
+
+    #[tokio::test]
+    async fn fetch_and_extract_falls_back_to_funkstudy_when_override_is_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/twitter/tweet/replies"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(fixture("replies_with_spotify.json")),
+            )
+            .mount(&server)
+            .await;
+
+        let adapter = FunkstudyAdapter::new("key".into(), "taizooo".into(), 30)
+            .with_base_url(server.uri());
+        let cand = CandidateRef {
+            source_external_id: "1001".into(),
+            source_url: "https://x.com/taizooo/status/1001".into(),
+            source_id_override: None,
+        };
+        let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
+        assert_eq!(rec.source_id, "funkstudy");
+    }
+
+    #[test]
+    fn match_configured_hashtag_returns_first_matching_in_config_order() {
+        let cfg = vec![
+            "yetanotherfunkstudy".to_string(),
+            "yetanotherbachstudy".to_string(),
+            "FUNKStudy".to_string(),
+        ];
+        assert_eq!(
+            match_configured_hashtag("写真 #yetanotherfunkstudy", &cfg),
+            Some("yetanotherfunkstudy".to_string())
+        );
+        assert_eq!(
+            match_configured_hashtag("#yetanotherbachstudy なう", &cfg),
+            Some("yetanotherbachstudy".to_string())
+        );
+    }
+
+    #[test]
+    fn match_configured_hashtag_normalizes_casing_to_config_form() {
+        let cfg = vec!["FUNKStudy".to_string()];
+        // 大文字小文字が違っても設定側の正準表記で返す
+        assert_eq!(match_configured_hashtag("#FUNKStudy", &cfg), Some("FUNKStudy".to_string()));
+        assert_eq!(match_configured_hashtag("#funkstudy", &cfg), Some("FUNKStudy".to_string()));
+    }
+
+    #[test]
+    fn match_configured_hashtag_anchors_on_hash_so_funkstudy_does_not_match_inside_yetanother() {
+        // "#funkstudy" は "#yetanotherfunkstudy" の部分文字列ではない（直前が '#' でなく 'r'）
+        let cfg = vec!["FUNKStudy".to_string(), "yetanotherfunkstudy".to_string()];
+        assert_eq!(
+            match_configured_hashtag("#yetanotherfunkstudy", &cfg),
+            Some("yetanotherfunkstudy".to_string())
+        );
+    }
+
+    #[test]
+    fn match_configured_hashtag_returns_none_when_absent() {
+        let cfg = vec!["yetanotherfunkstudy".to_string()];
+        assert_eq!(match_configured_hashtag("ただのツイート", &cfg), None);
     }
 }

@@ -247,6 +247,7 @@ mod tests {
                 .map(|i| CandidateRef {
                     source_external_id: i.source_external_id.clone(),
                     source_url: i.source_url.clone(),
+                    source_id_override: None,
                 })
                 .collect())
         }
@@ -495,6 +496,7 @@ mod tests {
             Ok(vec![CandidateRef {
                 source_external_id: "e1".into(),
                 source_url: "https://example.com/entry-e1.html".into(),
+                source_id_override: None,
             }])
         }
         async fn fetch_and_extract(
@@ -582,6 +584,7 @@ mod tests {
                 Ok(vec![CandidateRef {
                     source_external_id: "e2".into(),
                     source_url: "https://example.com/entry-e2.html".into(),
+                    source_id_override: None,
                 }])
             }
             async fn fetch_and_extract(
@@ -824,14 +827,17 @@ mod tests {
                     CandidateRef {
                         source_external_id: "ok".into(),
                         source_url: "https://example.com/ok".into(),
+                        source_id_override: None,
                     },
                     CandidateRef {
                         source_external_id: "fail".into(),
                         source_url: "https://example.com/fail".into(),
+                        source_id_override: None,
                     },
                     CandidateRef {
                         source_external_id: "ok2".into(),
                         source_url: "https://example.com/ok2".into(),
+                        source_id_override: None,
                     },
                 ])
             }

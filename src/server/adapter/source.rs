@@ -6,6 +6,9 @@ use async_trait::async_trait;
 pub struct CandidateRef {
     pub source_external_id: String,
     pub source_url: String,
+    /// 保存行の source_id 上書き。 None ならアダプタ既定（fetch_and_extract が決める）を使う。
+    /// funkstudy が「どのハッシュタグでマッチしたか」を list_candidates → fetch_and_extract へ運ぶ。
+    pub source_id_override: Option<String>,
 }
 
 #[async_trait]
