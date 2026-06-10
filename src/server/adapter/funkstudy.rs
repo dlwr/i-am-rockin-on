@@ -227,10 +227,11 @@ impl MediaSource for FunkstudyAdapter {
             } else {
                 t.url
             };
+            let source_id_override = match_configured_hashtag(&t.text, &self.hashtags);
             out.push(CandidateRef {
                 source_external_id: t.id,
                 source_url,
-                source_id_override: None,
+                source_id_override,
             });
         }
         // 満杯ページ = 取りこぼしの可能性。 has_next_page は当てにならないので件数で判定し、
@@ -367,6 +368,11 @@ mod tests {
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].source_external_id, "1001");
         assert_eq!(cands[0].source_url, "https://x.com/taizooo/status/1001");
+        assert_eq!(
+            cands[0].source_id_override.as_deref(),
+            Some("yetanotherfunkstudy"),
+            "search.json の text '#yetanotherfunkstudy' から検出して載せる"
+        );
     }
 
     #[tokio::test]
