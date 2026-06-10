@@ -241,6 +241,7 @@ impl MediaSource for RokinonAdapter {
                         out.push(CandidateRef {
                             source_external_id: entry_id,
                             source_url: self.make_absolute(href),
+                            source_id_override: None,
                         });
                     }
                 }
@@ -489,6 +490,7 @@ mod tests {
         let candidate = CandidateRef {
             source_external_id: "12966301740".into(),
             source_url: format!("{}/stamedba/entry-12966301740.html", server.uri()),
+            source_id_override: None,
         };
         let rec = adapter.fetch_and_extract(&candidate).await.unwrap().unwrap();
         assert_eq!(rec.artist_name, "Hiding Places");
@@ -513,6 +515,7 @@ mod tests {
         let candidate = CandidateRef {
             source_external_id: "12966301740".into(),
             source_url: format!("{}/stamedba/entry-12966301740.html", server.uri()),
+            source_id_override: None,
         };
         let rec = adapter.fetch_and_extract(&candidate).await.unwrap().unwrap();
         // 実公開日が取れないので推し月の月初へフォールバックする。

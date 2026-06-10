@@ -198,6 +198,7 @@ impl MediaSource for PitchforkAdapter {
                     out.push(CandidateRef {
                         source_external_id: slug.to_string(),
                         source_url: self.make_absolute(&path),
+                        source_id_override: None,
                     });
                 }
             }
@@ -365,6 +366,7 @@ mod tests {
         let cand = CandidateRef {
             source_external_id: "aldous-harding-train-on-the-island".into(),
             source_url: format!("{}/reviews/albums/aldous-harding-train-on-the-island/", server.uri()),
+            source_id_override: None,
         };
         let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
         assert_eq!(rec.source_id, "pitchfork");
@@ -388,6 +390,7 @@ mod tests {
         let cand = CandidateRef {
             source_external_id: "some-low-score".into(),
             source_url: format!("{}/reviews/albums/some-low-score/", server.uri()),
+            source_id_override: None,
         };
         assert!(adapter.fetch_and_extract(&cand).await.unwrap().is_none());
     }
@@ -406,6 +409,7 @@ mod tests {
         let cand = CandidateRef {
             source_external_id: "old-artist-old-album".into(),
             source_url: format!("{}/reviews/albums/old-artist-old-album/", server.uri()),
+            source_id_override: None,
         };
         assert!(adapter.fetch_and_extract(&cand).await.unwrap().is_none());
     }

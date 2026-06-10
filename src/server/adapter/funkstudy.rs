@@ -219,6 +219,7 @@ impl MediaSource for FunkstudyAdapter {
             out.push(CandidateRef {
                 source_external_id: t.id,
                 source_url,
+                source_id_override: None,
             });
         }
         // 満杯ページ = 取りこぼしの可能性。 has_next_page は当てにならないので件数で判定し、
@@ -373,6 +374,7 @@ mod tests {
         let cand = CandidateRef {
             source_external_id: "1001".into(),
             source_url: "https://x.com/taizooo/status/1001".into(),
+            source_id_override: None,
         };
         let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
         assert_eq!(
@@ -402,6 +404,7 @@ mod tests {
         let cand = CandidateRef {
             source_external_id: "2042213253716341074".into(),
             source_url: "https://x.com/taizooo/status/2042213253716341074".into(),
+            source_id_override: None,
         };
         let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
         assert_eq!(
@@ -438,6 +441,7 @@ mod tests {
         let cand = CandidateRef {
             source_external_id: "2042213253716341074".into(),
             source_url: "https://x.com/taizooo/status/2042213253716341074".into(),
+            source_id_override: None,
         };
         let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
         assert_eq!(
@@ -462,6 +466,7 @@ mod tests {
         let cand = CandidateRef {
             source_external_id: "1001".into(),
             source_url: "https://x.com/taizooo/status/1001".into(),
+            source_id_override: None,
         };
         let err = adapter.fetch_and_extract(&cand).await.unwrap_err();
         assert!(matches!(err, AppError::Retryable(_)));
