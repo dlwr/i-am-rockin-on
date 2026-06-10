@@ -107,6 +107,17 @@ impl FunkstudyAdapter {
     }
 }
 
+/// `text` に `#<tag>` が含まれる最初の設定タグを、 設定側の正準表記で返す。
+/// `#` アンカー + case-insensitive 一致。 `#` を前置することで `#funkstudy` が
+/// `#yetanotherfunkstudy` に誤マッチしない（直前が `#` でないと一致しないため）。
+fn match_configured_hashtag(text: &str, configured: &[String]) -> Option<String> {
+    let lower = text.to_lowercase();
+    configured
+        .iter()
+        .find(|tag| lower.contains(&format!("#{}", tag.to_lowercase())))
+        .cloned()
+}
+
 /// twitterapi.io advanced_search のクエリを組む。 ハッシュタグが複数なら
 /// `(#a OR #b)` で OR 検索する（funk / bach 等を 1 ソースでまとめて拾う）。
 fn build_query(screen_name: &str, hashtags: &[String], since: &str) -> String {
@@ -470,5 +481,46 @@ mod tests {
         };
         let err = adapter.fetch_and_extract(&cand).await.unwrap_err();
         assert!(matches!(err, AppError::Retryable(_)));
+    }
+
+    #[test]
+    fn match_configured_hashtag_returns_first_matching_in_config_order() {
+        let cfg = vec![
+            "yetanotherfunkstudy".to_string(),
+            "yetanotherbachstudy".to_string(),
+            "FUNKStudy".to_string(),
+        ];
+        assert_eq!(
+            match_configured_hashtag("写真 #yetanotherfunkstudy", &cfg),
+            Some("yetanotherfunkstudy".to_string())
+        );
+        assert_eq!(
+            match_configured_hashtag("#yetanotherbachstudy なう", &cfg),
+            Some("yetanotherbachstudy".to_string())
+        );
+    }
+
+    #[test]
+    fn match_configured_hashtag_normalizes_casing_to_config_form() {
+        let cfg = vec!["FUNKStudy".to_string()];
+        // 大文字小文字が違っても設定側の正準表記で返す
+        assert_eq!(match_configured_hashtag("#FUNKStudy", &cfg), Some("FUNKStudy".to_string()));
+        assert_eq!(match_configured_hashtag("#funkstudy", &cfg), Some("FUNKStudy".to_string()));
+    }
+
+    #[test]
+    fn match_configured_hashtag_anchors_on_hash_so_funkstudy_does_not_match_inside_yetanother() {
+        // "#funkstudy" は "#yetanotherfunkstudy" の部分文字列ではない（直前が '#' でなく 'r'）
+        let cfg = vec!["FUNKStudy".to_string(), "yetanotherfunkstudy".to_string()];
+        assert_eq!(
+            match_configured_hashtag("#yetanotherfunkstudy", &cfg),
+            Some("yetanotherfunkstudy".to_string())
+        );
+    }
+
+    #[test]
+    fn match_configured_hashtag_returns_none_when_absent() {
+        let cfg = vec!["yetanotherfunkstudy".to_string()];
+        assert_eq!(match_configured_hashtag("ただのツイート", &cfg), None);
     }
 }
