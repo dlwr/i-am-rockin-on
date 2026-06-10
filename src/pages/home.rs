@@ -9,13 +9,16 @@ fn image_alt(artist: &str, album: Option<&str>) -> String {
     }
 }
 
-/// `source_id` を表示用ラベルに写像する。未知の id はそのまま返す。
-fn source_label(source_id: &str) -> &str {
+/// `source_id` を表示用ラベルに写像する。
+/// サイト系ソースは明示マッピング。 それ以外（funkstudy 系ハッシュタグ、
+/// FUNKSTUDY_HASHTAGS で env 追加した分も含む）は `#tag` 表示にフォールバックする。
+fn source_label(source_id: &str) -> String {
     match source_id {
-        "rokinon" => "ロキノンには騙されないぞ",
-        "pitchfork" => "Pitchfork",
-        "funkstudy" => "yetanother(funk|bach)study",
-        other => other,
+        "rokinon" => "ロキノンには騙されないぞ".into(),
+        "pitchfork" => "Pitchfork".into(),
+        // デプロイ前にスクレイプ済みの旧 funkstudy 行（タグ未分離）向けの残置ラベル
+        "funkstudy" => "yetanother(funk|bach)study".into(),
+        other => format!("#{other}"),
     }
 }
 
@@ -51,8 +54,16 @@ mod tests {
     }
 
     #[test]
-    fn source_label_unknown_id_passthrough() {
-        assert_eq!(source_label("nme"), "nme");
+    fn source_label_hashtag_sources_get_hash_prefix() {
+        assert_eq!(source_label("yetanotherfunkstudy"), "#yetanotherfunkstudy");
+        assert_eq!(source_label("yetanotherbachstudy"), "#yetanotherbachstudy");
+        assert_eq!(source_label("FUNKStudy"), "#FUNKStudy");
+    }
+
+    #[test]
+    fn source_label_unknown_id_falls_back_to_hash_prefix() {
+        // サイト系ソースは必ず明示アームを持つ。 other に落ちるのは funkstudy 系タグのみという前提。
+        assert_eq!(source_label("nme"), "#nme");
     }
 
     #[cfg(feature = "ssr")]
@@ -441,7 +452,7 @@ fn SourceMenu(sources: Vec<SourceLinkView>) -> impl IntoView {
                             href=s.source_url
                             target="_blank"
                             rel="noopener"
-                        >{source_label(&s.source_id).to_string()}</a>
+                        >{source_label(&s.source_id)}</a>
                     </li>
                 }).collect_view()}
             </ul>
