@@ -279,7 +279,10 @@ impl MediaSource for FunkstudyAdapter {
                 let featured_at = created_at_to_jst_date(&reply.created_at)
                     .unwrap_or_else(|| (Utc::now() + chrono::Duration::hours(9)).date_naive());
                 return Ok(Some(NewRecommendation {
-                    source_id: "funkstudy".into(),
+                    source_id: candidate
+                        .source_id_override
+                        .clone()
+                        .unwrap_or_else(|| "funkstudy".to_string()),
                     source_url: candidate.source_url.clone(),
                     source_external_id: candidate.source_external_id.clone(),
                     featured_at,
@@ -487,6 +490,50 @@ mod tests {
         };
         let err = adapter.fetch_and_extract(&cand).await.unwrap_err();
         assert!(matches!(err, AppError::Retryable(_)));
+    }
+
+    #[tokio::test]
+    async fn fetch_and_extract_uses_source_id_override_for_source_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/twitter/tweet/replies"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(fixture("replies_with_spotify.json")),
+            )
+            .mount(&server)
+            .await;
+
+        let adapter = FunkstudyAdapter::new("key".into(), "taizooo".into(), 30)
+            .with_base_url(server.uri());
+        let cand = CandidateRef {
+            source_external_id: "1001".into(),
+            source_url: "https://x.com/taizooo/status/1001".into(),
+            source_id_override: Some("yetanotherbachstudy".into()),
+        };
+        let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
+        assert_eq!(rec.source_id, "yetanotherbachstudy");
+    }
+
+    #[tokio::test]
+    async fn fetch_and_extract_falls_back_to_funkstudy_when_override_is_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/twitter/tweet/replies"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(fixture("replies_with_spotify.json")),
+            )
+            .mount(&server)
+            .await;
+
+        let adapter = FunkstudyAdapter::new("key".into(), "taizooo".into(), 30)
+            .with_base_url(server.uri());
+        let cand = CandidateRef {
+            source_external_id: "1001".into(),
+            source_url: "https://x.com/taizooo/status/1001".into(),
+            source_id_override: None,
+        };
+        let rec = adapter.fetch_and_extract(&cand).await.unwrap().unwrap();
+        assert_eq!(rec.source_id, "funkstudy");
     }
 
     #[test]
