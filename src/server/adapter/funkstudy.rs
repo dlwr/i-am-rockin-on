@@ -46,6 +46,7 @@ impl FunkstudyAdapter {
             hashtags: vec![
                 "yetanotherfunkstudy".into(),
                 "yetanotherbachstudy".into(),
+                "FUNKStudy".into(),
             ],
             retry_base: Duration::from_secs(3),
             max_retries: 3,
@@ -337,6 +338,18 @@ mod tests {
                 "2026-05-03"
             ),
             "from:taizooo (#yetanotherfunkstudy OR #yetanotherbachstudy) since:2026-05-03"
+        );
+        assert_eq!(
+            build_query(
+                "taizooo",
+                &[
+                    "yetanotherfunkstudy".into(),
+                    "yetanotherbachstudy".into(),
+                    "FUNKStudy".into()
+                ],
+                "2026-05-03"
+            ),
+            "from:taizooo (#yetanotherfunkstudy OR #yetanotherbachstudy OR #FUNKStudy) since:2026-05-03"
         );
     }
 

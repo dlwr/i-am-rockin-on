@@ -30,7 +30,11 @@ fn parse_funkstudy_hashtags(raw: Option<String>) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .collect();
     if parsed.is_empty() {
-        vec!["yetanotherfunkstudy".into(), "yetanotherbachstudy".into()]
+        vec![
+            "yetanotherfunkstudy".into(),
+            "yetanotherbachstudy".into(),
+            "FUNKStudy".into(),
+        ]
     } else {
         parsed
     }
@@ -154,7 +158,11 @@ mod tests {
         assert!(cfg.funkstudy_enabled);
         assert_eq!(
             cfg.funkstudy_hashtags,
-            vec!["yetanotherfunkstudy".to_string(), "yetanotherbachstudy".to_string()]
+            vec![
+                "yetanotherfunkstudy".to_string(),
+                "yetanotherbachstudy".to_string(),
+                "FUNKStudy".to_string()
+            ]
         );
 
         if let Some(v) = saved_key { std::env::set_var("FUNKSTUDY_API_KEY", v); }
@@ -167,14 +175,22 @@ mod tests {
 
     #[test]
     fn parse_funkstudy_hashtags_handles_defaults_and_custom() {
-        // 未設定・空 → 既定 (funk + bach)
+        // 未設定・空 → 既定 (funk + bach + FUNKStudy)
         assert_eq!(
             parse_funkstudy_hashtags(None),
-            vec!["yetanotherfunkstudy".to_string(), "yetanotherbachstudy".to_string()]
+            vec![
+                "yetanotherfunkstudy".to_string(),
+                "yetanotherbachstudy".to_string(),
+                "FUNKStudy".to_string()
+            ]
         );
         assert_eq!(
             parse_funkstudy_hashtags(Some("  ,  ".into())),
-            vec!["yetanotherfunkstudy".to_string(), "yetanotherbachstudy".to_string()]
+            vec![
+                "yetanotherfunkstudy".to_string(),
+                "yetanotherbachstudy".to_string(),
+                "FUNKStudy".to_string()
+            ]
         );
         // `#` 有無・空白・空要素を正規化
         assert_eq!(
