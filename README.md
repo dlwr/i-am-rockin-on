@@ -41,7 +41,7 @@ mise run visual
 現在の取り込み元:
 - **rokinon** — Ameblo の「ロキノンには騙されないぞ」RSS から `YYYYMM推し` 記事を抽出
 - **pitchfork** — Pitchfork のアルバムレビューから直近 `PITCHFORK_RECENCY_DAYS` 日 ・ score `PITCHFORK_SCORE_THRESHOLD` 以上を抽出
-- **funkstudy** — X の taizooo (`FUNKSTUDY_SCREEN_NAME`) の `#yetanotherfunkstudy` / `#yetanotherbachstudy`（`FUNKSTUDY_HASHTAGS` で増減可）付きポストを twitterapi.io 経由で拾い、 ぶら下がる返信中の Spotify アルバム URL から取り込む
+- **funkstudy** — X の taizooo (`FUNKSTUDY_SCREEN_NAME`) の `#yetanotherfunkstudy` / `#yetanotherbachstudy` / `#FUNKStudy`（`FUNKSTUDY_HASHTAGS` で増減可）付きポストを twitterapi.io 経由で拾い、 ぶら下がる返信中の Spotify アルバム URL から取り込む。 ドロップダウンには投稿ごとに実際のハッシュタグ名を表示する
 
 新メディアを足す場合は `MediaSource` trait を `impl` し、 `main.rs` で `add_scrape_job` を 1 行追加する。
 
@@ -61,7 +61,7 @@ mise run visual
 | `FUNKSTUDY_ENABLED` | no | `1` | `0` で funkstudy ソースを無効化 |
 | `FUNKSTUDY_SCREEN_NAME` | no | `taizooo` | 監視する X アカウント |
 | `FUNKSTUDY_BACKFILL_DAYS` | no | `30` | advanced_search で遡る日数 |
-| `FUNKSTUDY_HASHTAGS` | no | `yetanotherfunkstudy,yetanotherbachstudy` | 取り込む `#…study` 系タグ（カンマ区切り・`#` 任意）。複数は OR 検索 |
+| `FUNKSTUDY_HASHTAGS` | no | `yetanotherfunkstudy,yetanotherbachstudy,FUNKStudy` | 取り込む `#…study` 系タグ（カンマ区切り・`#` 任意）。複数は OR 検索 |
 | `DISABLE_SCRAPE` | no | — | `1` で initial scrape と定期スケジューラを抑止。 視覚回帰テスト向けの knob |
 
 ## ヘルスチェック
